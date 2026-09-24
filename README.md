@@ -19,7 +19,7 @@ Parametric
 
 Every pawn gets a **Load Support** multiplier (a healthy body is exactly ×1.00). It is worked out from the current state of the pawn's legs, core and arms, and it scales:
 
-- the **`CarryingCapacity`** stat (hand-hauling), after the Manipulation correction in §7
+- the **`CarryingCapacity`** stat (hand-hauling), after the Manipulation correction in §7 (superhuman arms only; vanilla keeps its penalty for weak or missing arms)
 - **`MassUtility.Capacity`** (inventory encumbrance, caravans, transport pods, shuttles), optional and on by default
 
 | Load Support | Meaning |
@@ -106,46 +106,97 @@ old:   75 × 3 (vanilla Manipulation) × 15.59 (Load Support) ≈ 3507 kg
 fixed: 75 × 15.59                                            ≈ 1169 kg
 ```
 
-Vanilla's Manipulation level is **limb efficiency × consciousness × capMods × genes × custom-worker logic**. Load Support represents only the *limb* part, so Parametric removes only that part:
+### The rule: enhancement-only
+
+`CarryingCapacity` asks two different questions:
+
+1. **Manipulation**: can the pawn physically grip and control the hauled item?
+2. **Load Support**: can the body structurally bear that weight?
+
+Below baseline, **both** matter. Above baseline, only one of them may scale with the arms. So:
+
+| Manipulation-limb efficiency X | What happens |
+|---|---|
+| **X < 100%** (injured, missing, weak, simple or poor prosthetics) | **Nothing is compensated.** Vanilla's Manipulation penalty stays, and Load Support multiplies on top. |
+| **X = 100%** | Nothing changes. |
+| **X > 100%** (bionic, archotech, modded superhuman parts) | Vanilla's **above-normal limb bonus** is removed. Load Support supplies the superhuman scaling instead. |
+
+In short: **vanilla decides whether your hands still work; Parametric decides how superhuman your body is.**
 
 ```
-Y = pawn's Manipulation level (the same cached value vanilla just used)
-X = Load Support's upper-limb efficiency
-vanilla    = Lerp(1, cf.GetFactor(Y),     cf.weight)
-normalized = Lerp(1, cf.GetFactor(Y / X), cf.weight)      ← vanilla's factor with 100% limbs
+One missing arm:   75 × 0.50 (vanilla Manipulation) × 0.95 (Load Support) ≈ 35.6 kg
+Both arms at 33%:  75 × 0.33 × 0.925                                      ≈ 22.9 kg
+Both arms missing: 75 × 0    × …                                          = 0 kg
+```
+
+The earlier 0.1.1 draft compensated in both directions, which erased the disability. A one-armed pawn hauled 71 kg, and 1% arms still carried about 64 kg while 0% carried 0. That cliff is gone. Hand-carry now falls smoothly to zero with Manipulation.
+
+### How the superhuman share is removed (X > 1)
+
+```
+Y  = the pawn's real Manipulation level (the same cached value vanilla just used)
+Y1 = the Manipulation level with 100% manipulation limbs and every other influence unchanged
+vanilla    = Lerp(1, cf.GetFactor(Y),  cf.weight)
+normalized = Lerp(1, cf.GetFactor(Y1), cf.weight)
 ManipulationCompensation = Π over the stat's Manipulation factors of (normalized / vanilla)
 ```
 
-- It reads `StatDefOf.CarryingCapacity.capacityFactors` **at runtime** and calls the **real** `PawnCapacityFactor.GetFactor`, so `weight`, `max`, `allowedDefect` and `useReciprocal` are respected, and a mod that reconfigures (or patches) the factor is followed automatically. With no Manipulation factor there is no compensation.
-- Everything else is kept: BodySize (StatPart_BodySize), stat factors and offsets, genes, traits, other mods' parts, other capacity factors, and the **non-limb share** of Manipulation (consciousness, drugs, capMods, genes). For example, a pawn at 50% consciousness still gets vanilla's ×0.5.
-- Vanilla rounds capacity levels to 0.01. When Y is exactly `round(X)` the systemic part is treated as exactly 1, which removes rounding noise.
-- Y/X is exact for multiplicative effects. For **additive** capMod offsets combined with non-100% limbs it is an approximation (+50% Manipulation offset with bionic arms: 109 kg vs 117 kg for a purely additive reading).
-- **Not correctable:** with every manipulator gone (X ≈ 0), or a vanilla factor of 0, vanilla's result was 0 and can't be divided back, so it stands (no hands, no hand-carrying). Bodies with no manipulation limbs at all (animals) get no compensation, because nothing was double-counted.
+**Neutral-limb Manipulation (`Y1`) is calculated exactly.** The vanilla 1.6 pipeline, verified against the assembly:
+
+```
+PawnCapacityWorker_Manipulation:  base = limbEfficiency(ManipulationLimb*, 0.8) × Consciousness
+CalculateCapacityLevel:           zeroIfCannotBeAwake && !CanBeAwake → 0
+                                  if base > 0: (base + Σ offset) × Π postFactor, min setMax
+                                     hediff postFactors scaled by capacityFactorEffectMultiplier,
+                                     setMax via EvaluateSetMax (curve/stat aware), active Biotech gene capMods
+                                  max(minValue) → RoundedHundredth
+```
+
+`ManipulationCompensation.CalculateManipulationWithNeutralLimbs` reads the pawn's Manipulation capMods (hediffs and active genes, from their runtime defs) in one allocation-free pass. It then applies that capMod phase to two bases:
+
+- `predicted = phase(X × Consciousness)`. This must reproduce the real level Y. It is the self-check.
+- `Y1 = phase(1.0 × Consciousness)`. This is the answer.
+
+So additive offsets survive limb normalisation exactly. For bionic arms plus a +50% Manipulation offset, the real level is 1.25 + 0.50 = 1.75 and the neutral-limb level is 1.00 + 0.50 = 1.50, giving 117 kg. The draft's Y / X ratio gave 109 kg.
+
+**Fallback.** If `predicted` doesn't match Y within vanilla's 0.01 rounding, the Manipulation pipeline isn't the standard one. That covers a mod that replaces the worker, a patch that changes the worker's math, or a malformed hediff that throws. In that case Parametric uses the ratio `Y1 = Y / X`, which is exact for multiplicative influences such as consciousness and postFactors. The fallback is never used for X ≤ 1, so it can only remove superhuman enhancement and never compensates a disability. A Harmony patch that doesn't change the worker's result (logging, bookkeeping) still takes the exact path. No worker type check is made.
+
+**Also kept.**
+- `StatDefOf.CarryingCapacity.capacityFactors` is read **at runtime** and the **real** `PawnCapacityFactor.GetFactor` is called, so `weight`, `max`, `allowedDefect` and `useReciprocal` are respected. A mod that reconfigures (or patches) the factor is followed automatically. With no Manipulation factor there is no compensation.
+- Everything else stays as vanilla composed it: BodySize (StatPart_BodySize), stat factors and offsets, genes, traits, other mods' parts, other capacity factors, and the **systemic** share of Manipulation (consciousness, drugs, capMods, genes, setMax). At 50% consciousness, a pawn with bionic arms keeps vanilla's ×0.5 (Y = 0.62, Y1 = 0.50).
+
+**Left as vanilla computed it:** limbs ≤ 100%, no Manipulation factor on the stat, bodies with no manipulation limbs (animals), a vanilla factor of 0 (for example, the pawn can't be awake), and a neutral-limb factor ≤ 0. That last case is a systemic penalty so large that only the superhuman limbs keep Manipulation above zero; vanilla's value is kept rather than zeroing the stat.
 
 `MassUtility.Capacity` has **no** Manipulation factor, so **no compensation** is applied there.
 
-Full-pipeline results from the integration tests (the real `pawn.GetStatValue(CarryingCapacity)`, vanilla configuration):
+Full-pipeline results from the integration tests (the real `pawn.GetStatValue(CarryingCapacity)`, vanilla configuration). "Draft" is the first 0.1.1 revision, which compensated in both directions using Y / X.
 
-| Pawn | Manip | Vanilla | Old bug (v0.1.0) | **Now** |
-|---|---|---|---|---|
-| Healthy | 1.00 | 75.0 | 75.0 | **75.0** |
-| Missing one arm | 0.50 | 37.5 | 35.6 | **71.3** |
-| Both arms compromised (40% HP) | 0.33 | 24.8 | 22.9 | **69.4** |
-| Two bionic arms | 1.25 | 93.8 | 97.6 | **78.1** |
-| Two bionic legs only | 1.00 | 75.0 | 98.0 | **98.0** |
-| Full vanilla bionic | 1.25 | 93.8 | 143.3 | **114.7** |
-| Archotech arms + legs | 1.50 | 112.5 | 187.1 | **124.7** |
-| Modded 300% arms only | 3.00 | 225.0 | 254.7 | **84.9** |
-| Modded 300% legs only | 1.00 | 75.0 | 157.3 | **157.3** |
-| Modded 300% full body | 3.00 | 225.0 | 3507.4 | **1169.1** |
-| Modded 500% full body | 5.00 | 375.0 | 20963.1 | **4192.6** |
-| capMod Manipulation +50% | 1.50 | 112.5 | 112.5 | **112.5** |
-| Consciousness 50% | 0.50 | 37.5 | 37.5 | **37.5** |
-| Stat factor ×2 (e.g. a gene) | 1.00 | 150.0 | 150.0 | **150.0** |
-| Stat offset +50 | 1.00 | 125.0 | 125.0 | **125.0** |
-| Body size 1.5 + bionic arms | 1.25 | 140.6 | 146.4 | **117.1** |
+| Pawn | Limbs | Manip | Vanilla | v0.1.0 | Draft | **Now** |
+|---|---|---|---|---|---|---|
+| Healthy | 1.00 | 1.00 | 75.0 | 75.0 | 75.0 | **75.0** |
+| Missing one arm | 0.50 | 0.50 | 37.5 | 35.6 | 71.3 | **35.6** |
+| Both arms compromised (40% HP) | 0.33 | 0.33 | 24.8 | 22.9 | 69.4 | **22.9** |
+| Both arms missing | 0 | 0 | 0 | 0 | 0 | **0** |
+| Two simple prosthetic arms | 0.85 | 0.85 | 63.8 | 63.0 | 74.1 | **63.0** |
+| Two bionic arms | 1.25 | 1.25 | 93.8 | 97.6 | 78.1 | **78.1** |
+| Two bionic legs only | 1.00 | 1.00 | 75.0 | 98.0 | 98.0 | **98.0** |
+| Full vanilla bionic | 1.25 | 1.25 | 93.8 | 143.3 | 114.7 | **114.7** |
+| Archotech arms + legs | 1.50 | 1.50 | 112.5 | 187.1 | 124.7 | **124.7** |
+| Modded 300% arms only | 3.00 | 3.00 | 225.0 | 254.7 | 84.9 | **84.9** |
+| Modded 300% full body | 3.00 | 3.00 | 225.0 | 3507.4 | 1169.1 | **1169.1** |
+| Modded 500% full body | 5.00 | 5.00 | 375.0 | 20963.1 | 4192.6 | **4192.6** |
+| Manipulation +50%, healthy arms | 1.00 | 1.50 | 112.5 | 112.5 | 112.5 | **112.5** |
+| Manipulation +50%, bionic arms | 1.25 | 1.75 | 131.3 | 136.6 | 109.3 | **117.1** |
+| Manipulation +50%, 300% arms | 3.00 | 3.50 | 262.5 | 297.1 | 99.0 | **127.3** |
+| Manipulation −25%, 300% arms | 3.00 | 2.75 | 206.3 | 233.4 | 77.8 | **63.7** |
+| Manipulation setMax 120%, 300% arms | 3.00 | 1.20 | 90.0 | 101.9 | 34.0 | **84.9** |
+| Consciousness 50% | 1.00 | 0.50 | 37.5 | 37.5 | 37.5 | **37.5** |
+| Consciousness 50% + bionic arms | 1.25 | 0.62 | 46.5 | 48.4 | 38.7 | **39.0** |
+| Stat factor ×2 + 300% arms | 3.00 | 3.00 | 450.0 | 509.4 | 169.8 | **169.8** |
+| Stat offset +50 + missing arm | 0.50 | 0.50 | 62.5 | 59.4 | 118.8 | **59.4** |
 
-**Design consequence to be aware of:** with vanilla's Manipulation factor replaced, hand-carry is only as sensitive to arms as Load Support's 15% upper weight. A one-armed pawn now hauls about 71 kg, where vanilla gives 37.5 kg; 300% arms alone give 85 kg, where vanilla gives 225 kg. This follows the v0.1 design, but it's a tuning question for later (see *v0.2 candidates*).
+Weak-limb series (both arms at the given efficiency): 100% 75.0 · 85% 63.0 · 60% 43.3 · 50% 35.6 · 25% 17.1 · 10% 6.6 · 1% 0.6 · 0% 0 kg. The series is monotonic, never above vanilla, and has no cliff.
+Superhuman series: 100% 75.0 · 125% 78.1 · 150% 80.3 · 300% 84.9 · 500% 85.9 kg. This is 75 × Load Support: arms alone are bottlenecked by a normal core (§5).
 
 ## 8. Inventory / caravan mass path
 
@@ -166,12 +217,16 @@ There is no `ModsConfig.IsActive(...)`, no DefName checks, no per-bionic XML, an
 ## 11. Known limitations
 
 - Non-standard body mechanics are invisible: a C# worker that ignores the vanilla tags, limb buffs expressed only as stat offsets, or custom tags. Those regions read as absent or normal.
-- Additive Manipulation capMod offsets combined with non-100% limbs are approximated (§7).
-- An inspiration that adds a flat offset to `CarryingCapacity` (applied by vanilla *after* capacity factors) would be scaled by the compensation. I know of no vanilla inspiration that does this.
+- **Additive StatParts that run before Parametric's.** `StatPart_LoadSupport` multiplies the value composed so far, so a flat part inserted before it (say, another mod's "+100 kg") is also multiplied. The integration test inserts exactly such a part:
+  - It is scaled by Load Support. This is intended: the body's structure scales everything it carries.
+  - For pawns with **superhuman manipulators only**, it is also scaled by the Manipulation compensation. With 300% arms the +100 kg counts as 33 kg before Load Support (122.6 kg instead of an ideal 198.1 kg). With a 300% body, 1688.8 kg instead of 2728.0 kg.
+  - Pawns whose manipulators are at or below 100% are **exactly** unaffected, because the compensation is 1.
+  - Multiplicative parts commute and are exact in every case (verified ×2).
+  - Fixing this would mean transpiling `StatWorker` or removing the vanilla factor globally, so it is accepted for v0.1. A vanilla flat `CarryingCapacity` offset is applied *before* capacity factors, so it is compensated correctly (test "offset +50 + 300% arms").
+- A Manipulation worker that is replaced or re-mathed by another mod gets the Y / X ratio fallback (§7) for superhuman pawns. It is exact for multiplicative influences; additive capMod offsets are then approximated.
 - Moving capMods use `SetMaxDefined` only; `statFactorMod` on capMods is not read (vanilla 1.6 never reads that field either).
 - A missing foot disables that leg for the lower region, exactly like vanilla's limb math.
 - A pawn with no legs drops to the 0.05 floor.
-- Arm sensitivity of hand-carry is now low (§7, design consequence).
 
 ## 12. Debug tools
 
@@ -189,7 +244,7 @@ Weighted Support (no bottleneck): 8.294
 Structural chain (legs+core harmonic): 2.225
 Structural/Bottleneck Factor: 0.253
 Final LoadSupport: 2.098
-Manipulation compensation: level 100%, limbs 100%, vanilla factor x1 -> limb-normalised x1  => x1
+Manipulation compensation: limbs 100% <= 100%, vanilla Manipulation penalty kept (x1)
 Vanilla/Base Carry Capacity: 75 kg
 Final Carry Capacity: 157.3 kg
 Base Inventory/Caravan Mass Capacity: 35 kg
@@ -201,13 +256,22 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 `Tests/run-tests.sh` runs both suites under Mono. The latest output is in `Tests/last-run.txt`.
 
 1. **FormulaTests** (pure math, no RimWorld): curve targets, 33 scenarios, monotonicity and continuity sweeps, NaN/∞ protection, and 200k random fuzz inputs. **All pass.**
-2. **IntegrationTests** (84 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
+2. **IntegrationTests** (149 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
    - Parametric's real patches (exactly 3 methods; nothing left under the old ID).
    - StatPart injection: idempotent, appended after `StatPart_BodySize`, clears `immutable`.
    - Synthetic human, quadruped, blob and tentacle bodies through vanilla limb and part efficiency.
-   - **The full `CarryingCapacity` pipeline** via real `pawn.GetStatValue()`, including the real Manipulation worker, `CalculateCapacityLevel`, `PawnCapacitiesHandler`, `PawnCapacityFactor.GetFactor` + weight Lerp, and vanilla `StatPart_BodySize`. It runs all 16 required cases plus consciousness and combined cases, and the double-count bug is asserted gone (3507 → 1169 kg).
+   - **The full `CarryingCapacity` pipeline** via real `pawn.GetStatValue()`, including the real Manipulation worker, `CalculateCapacityLevel`, `PawnCapacitiesHandler`, `PawnCapacityFactor.GetFactor` + weight Lerp, and vanilla `StatPart_BodySize`. It covers:
+     - the core cases;
+     - the **weak-limb series** 100/85/60/50/25/10/1/0% (monotonic, compensation exactly 1, no cliff);
+     - the **superhuman series** 100/125/150/300/500%;
+     - prosthetics (simple ×1 and ×2, poor 60%, bionic, archotech, 300%, 500%, archotech + missing);
+     - **±additive Manipulation capMods** at 100/125/300/500% limbs, plus postFactor and setMax;
+     - consciousness 50% with healthy, bionic, 300% and missing arms;
+     - direct stat offsets and factors, and body size, with weak and superhuman arms.
+   - A **patched Manipulation worker** (another mod's Harmony postfix): a result-preserving patch keeps the exact path; a math-changing patch is detected and takes the Y / X fallback; weak limbs are never compensated.
    - Runtime factor configurations: weight 0.5, max 1.0, allowedDefect 0.2, useReciprocal, no Manipulation factor, and an extra non-Manipulation capacity factor (preserved).
-   - `MassUtility` = BodySize × 35 × LS with no compensation, plus the setting toggles.
+   - **Other mods' StatParts** inserted before Parametric's: multiplicative ×2 (exact) and additive +100 kg (measured; see §11).
+   - `MassUtility` = BodySize × 35 × LS with no compensation (healthy, missing arm, bionic, 300% arms, 300% body), plus the setting toggles.
    - Cache behaviour: silent change stays cached; 1000-tick expiry; the **real `HediffSet.DirtyCache()`** postfix; clock rollback; settings generation; weak keys; zero-allocation lookups.
    - Benchmarks.
 
@@ -217,10 +281,11 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 
 | Path | Cost |
 |---|---|
-| Full body evaluation (uncached) | ~12 µs per pawn, at most once per 1000 ticks or per dirty event |
-| Cached lookup | ~0.13 µs, 0 bytes allocated |
-| Manipulation compensation | ~0.08 µs per query |
-| `GetStatValue(CarryingCapacity)` | 0.30 µs vanilla → 0.53 µs with Parametric |
+| Full body evaluation (uncached) | ~10–12 µs per pawn, at most once per 1000 ticks or per dirty event |
+| Cached lookup | ~0.11 µs, 0 bytes allocated |
+| Manipulation compensation, limbs ≤ 100% (most pawns) | ~0.02 µs (early out) |
+| Manipulation compensation, superhuman limbs (exact neutral-limb path) | ~0.16 µs (~0.23 µs with 3 extra hediffs) |
+| `GetStatValue(CarryingCapacity)` | ~0.23 µs vanilla → ~0.51 µs with Parametric (bionic-armed pawn) |
 
 **Still to check in-game:** real vanilla BodyDef XML, the settings UI, save/load, removing a bionics mod, a live caravan, and TPS on a real colony. Use the debug actions.
 
@@ -251,7 +316,7 @@ Source/Parametric/
     BodyRegionAnalyzer.cs               pawn → 3 region efficiencies (vanilla APIs)
     LoadSupportCalculator.cs            analyzer + formula, exception-safe
     LoadSupportCache.cs                 weak-keyed ephemeral cache
-    ManipulationCompensation.cs         exact removal of vanilla's Manipulation-limb share
+    ManipulationCompensation.cs         removal of vanilla's superhuman Manipulation-limb bonus (neutral-limb level)
     StatPart_LoadSupport.cs             CarryingCapacity integration
     HarmonyPatches.cs                   the 3 postfixes
     LoadSupportLog.cs                   "[Parametric:LoadSupport] " prefix
@@ -268,7 +333,6 @@ Source/Parametric/
 
 ## v0.2 candidates (not implemented)
 
-- Decide how much arms should matter for **hand-carry** now that vanilla's Manipulation factor is replaced, for example a stat-path-specific upper weight.
-- An exact (non-multiplicative) reconstruction for additive Manipulation capMod offsets, if that ever matters in practice.
+- Additive StatParts before Parametric's are scaled by the compensation for superhuman-armed pawns (§11). An exact fix needs the compensation applied at the capacity-factor step, not as a late StatPart.
 - Use final **Moving** as a secondary signal for the lower region. This was evaluated and **not adopted**: the vanilla Moving worker also multiplies Pelvis and Spine (already in Core, so they'd be double-counted) plus Breathing, BloodPumping and Consciousness (transient states would swing caravan capacity), and levels are rounded to 0.01.
 - Refresh a formed caravan's cached mass when a member's Load Support changes.

@@ -44,9 +44,14 @@ namespace Parametric.Debug
                 if (comp.Applied)
                     sb.AppendLine("Manipulation compensation: level " + comp.ManipulationLevel.ToStringPercent()
                                   + ", limbs " + comp.LimbEfficiency.ToStringPercent()
+                                  + ", with 100% limbs " + comp.NormalizedLevel.ToStringPercent()
+                                  + (comp.ExactNeutral ? " (exact)" : " (ratio fallback)")
                                   + ", vanilla factor x" + comp.VanillaFactor.ToString("0.###")
                                   + " -> limb-normalised x" + comp.NormalizedFactor.ToString("0.###")
                                   + "  => x" + comp.Multiplier.ToString("0.###"));
+                else if (comp.BelowNormalLimbs)
+                    sb.AppendLine("Manipulation compensation: limbs " + comp.LimbEfficiency.ToStringPercent()
+                                  + " <= 100%, vanilla Manipulation penalty kept (x1)");
                 else
                     sb.AppendLine("Manipulation compensation: not applicable (x1)");
 

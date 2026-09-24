@@ -14,8 +14,13 @@ namespace Parametric.LoadSupport
     ///   FinalizeValue:       stat.parts in LIST ORDER → postProcessCurve → postProcessStatFactors → scenario → round → clamp
     /// Pawn_CarryTracker.MaxStackSpaceEver reads the result as GetStatValue(CarryingCapacity) / VolumePerUnit.
     ///
-    /// Every vanilla/modded influence is kept (compatibility through composition) EXCEPT the manipulation-limb share of
-    /// vanilla's Manipulation capacity factor, which Load Support measures itself (see ManipulationCompensation).
+    /// Every vanilla/modded influence is kept (compatibility through composition) EXCEPT the superhuman (above 100%)
+    /// manipulation-limb share of vanilla's Manipulation capacity factor, which Load Support scales itself (see
+    /// ManipulationCompensation). Vanilla's penalty for damaged, missing or weak manipulators is always kept.
+    ///
+    /// Because this part multiplies the value composed so far, a flat (additive) StatPart that runs BEFORE it is also
+    /// scaled — by Load Support (intended: structure scales everything) and, for pawns with superhuman manipulators
+    /// only, by the compensation (a limitation; see README "Known limitations").
     ///
     /// ORDERING: StatPart.priority is only used by StatDef.PostLoad, which sorts the XML-defined parts once when defs
     /// load. FinalizeValue then iterates stat.parts in list order. This part is appended at startup (after PostLoad),

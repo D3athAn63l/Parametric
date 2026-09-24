@@ -12,7 +12,7 @@
   <LoadSupport_SectionDesc>Carrying capacity derived from the current condition of each pawn's legs, core (spine, pelvis, torso) and arms. A healthy body is exactly x1.00.</LoadSupport_SectionDesc>
 
   <!-- Stat explanation (CarryingCapacity info card) -->
-  <LoadSupport_ManipulationCompensation>Manipulation limb share (measured by Load Support instead): {0} (limbs {1})</LoadSupport_ManipulationCompensation>
+  <LoadSupport_ManipulationCompensation>Superhuman manipulator bonus (scaled by Load Support instead): {0} (limbs {1})</LoadSupport_ManipulationCompensation>
   <LoadSupport_StatExplanation>Load support (body condition): {0}</LoadSupport_StatExplanation>
   <LoadSupport_StatExplanationDetail>    lower body {0}, core {1}, upper body {2}</LoadSupport_StatExplanationDetail>
 
@@ -24,7 +24,7 @@
 
   <!-- Settings -->
   <LoadSupport_SettingEnabled>Enable Load Support</LoadSupport_SettingEnabled>
-  <LoadSupport_SettingEnabledDesc>Carrying capacity follows the body: legs, core and arms are measured through RimWorld's own part-efficiency system, and vanilla's Manipulation factor on carrying capacity is corrected so arms are not counted twice. Turning this off makes Load Support change nothing.</LoadSupport_SettingEnabledDesc>
+  <LoadSupport_SettingEnabledDesc>Carrying capacity follows the body: legs, core and arms are measured through RimWorld's own part-efficiency system, and vanilla's Manipulation factor on carrying capacity is corrected so superhuman arms are not counted twice (damaged or weak arms keep vanilla's penalty). Turning this off makes Load Support change nothing.</LoadSupport_SettingEnabledDesc>
 
   <LoadSupport_SettingExponent>Superhuman scaling exponent: {0}</LoadSupport_SettingExponent>
   <LoadSupport_SettingExponentDesc>Body regions above 100% efficiency are converted to strength as efficiency^exponent. 1.0 = linear. Below 100% efficiency the conversion is always linear.</LoadSupport_SettingExponentDesc>

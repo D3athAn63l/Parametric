@@ -16,6 +16,7 @@
 // Build/run: see Tests/run-tests.sh
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
@@ -25,6 +26,14 @@ using Parametric.LoadSupport;
 using RimWorld;
 using Verse;
 using OC = System.Reflection.Emit.OpCodes;
+
+// Another mod's CarryingCapacity StatPart: val = val × factor + add.
+class TestStatPart : StatPart
+{
+    public float factor = 1f, add = 0f;
+    public override void TransformValue(StatRequest req, ref float val) { val = val * factor + add; }
+    public override string ExplanationPart(StatRequest req) { return null; }
+}
 
 static class IntegrationTests
 {
@@ -248,6 +257,18 @@ static class IntegrationTests
         d.stages = new List<HediffStage> { stage };
         AddHediff<Hediff>(p, d, null);
     }
+    static void ManipSetMax(Pawn p, float setMax)
+    {
+        var d = MakeDef("TestManipSetMax", typeof(Hediff));
+        var stage = new HediffStage();
+        var mod = new PawnCapacityModifier(); mod.capacity = PawnCapacityDefOf.Manipulation; mod.setMax = setMax;
+        stage.capMods = new List<PawnCapacityModifier> { mod };
+        d.stages = new List<HediffStage> { stage };
+        AddHediff<Hediff>(p, d, null);
+    }
+    // Stands in for another mod's Harmony postfix on the vanilla Manipulation worker (1 = result-preserving).
+    static float ModdedWorkerScale = 1f;
+    static void ModdedManipulationWorker(ref float __result) { __result *= ModdedWorkerScale; }
     static void PartOffset(Pawn p, BodyPartRecord part, float offset)
     {
         var d = MakeDef("TestPartBuff", typeof(Hediff));
@@ -438,30 +459,52 @@ static class IntegrationTests
         Check("tentacle anatomy with lost limb: reduced but valid", LS("squidhurt") < 1f && LS("squidhurt") > 0.3f);
 
         // ================= FULL CarryingCapacity pipeline =================
+        // Rule under test (v0.1.1): manipulation limbs X <= 100% keep vanilla's Manipulation factor untouched (disability
+        // stays; Load Support multiplies on top). X > 100%: only the above-normal limb bonus is removed, using the
+        // Manipulation level the pawn would have with 100% limbs (Y1); every systemic influence stays.
+        //   expected = expectedBase x LS, where expectedBase is what vanilla gives with the limb bonus (if any) removed.
         Console.WriteLine("\n=== FULL CarryingCapacity pipeline: pawn.GetStatValue(CarryingCapacity) through the real StatWorker ===");
-        Console.WriteLine(string.Format("  {0,-42} {1,7} {2,9} {3,8} {4,8} {5,9} {6,9} {7,9}", "case", "Manip", "vanilla", "LS", "comp", "OLD bug", "NEW", "expected"));
         var P = new Dictionary<string, float[]>();
-        Func<string, Pawn, float, float[]> Pipe = (label, pawn, expectedNonDupBase) =>
+        const int X_ = 0, Y_ = 1, Y1_ = 2, VAN = 3, LSV = 4, COMP = 5, OLD = 6, NOW = 7, EXP = 8, EXACT = 9;
+        Action header = () => Console.WriteLine(string.Format("  {0,-46} {1,5} {2,5} {3,5} {4,8} {5,7} {6,6} {7,8} {8,8} {9,8}",
+            "case", "limbs", "Manip", "@100%", "vanilla", "LS", "comp", "PR#1", "NOW", "expected"));
+        Func<string, Pawn, float, float[]> Pipe = (label, pawn, expectedBase) =>
         {
             LoadSupportResult r = LoadSupportCache.GetResult(pawn, true);
-            float manip = pawn.health.capacities.GetLevel(PawnCapacityDefOf.Manipulation);
             float vanilla = CarryVanilla(pawn);                   // real pipeline, Load Support bypassed
             float now = Carry(pawn);                              // real pipeline, Parametric active
-            float cmp = ManipulationCompensation.Compute(carryStat, pawn, r);
-            float oldBug = vanilla * r.LoadSupport;               // what v0.1.0 (Load Support) produced
-            float expected = expectedNonDupBase * r.LoadSupport;  // non-duplicated base × Load Support
-            Console.WriteLine(string.Format("  {0,-42} {1,7:0.00} {2,9:0.0} {3,8:0.000} {4,8:0.000} {5,9:0.0} {6,9:0.0} {7,9:0.0}",
-                label, manip, vanilla, r.LoadSupport, cmp, oldBug, now, expected));
-            var row = new[] { manip, vanilla, r.LoadSupport, cmp, oldBug, now, expected };
+            ManipulationCompensation.Info info;
+            float cmp = ManipulationCompensation.Compute(carryStat, pawn, r, out info);
+            float y = pawn.health.capacities.GetLevel(PawnCapacityDefOf.Manipulation);
+            float x = r.HasUpper ? r.UpperEfficiency : 1f;
+            // What the first PR #1 revision produced: every limb deviation compensated via Y / X (0 limbs: vanilla 0).
+            // (vanilla factor configuration: weight 1, so the old multiplier was simply normalizedLevel / Y)
+            float oldNorm = Math.Abs(y - GenMath.RoundedHundredth(x)) < 1e-4f ? 1f : y / x;
+            float oldRule = (x > 1e-4f && y > 1e-4f ? vanilla * oldNorm / y : vanilla) * r.LoadSupport;
+            float expected = expectedBase * r.LoadSupport;
+            Console.WriteLine(string.Format("  {0,-46} {1,5:0.00} {2,5:0.00} {3,5:0.00} {4,8:0.0} {5,7:0.000} {6,6:0.000} {7,8:0.0} {8,8:0.0} {9,8:0.0}{10}",
+                label, x, y, info.Applied ? info.NormalizedLevel : y, vanilla, r.LoadSupport, cmp, oldRule, now, expected,
+                info.Applied ? (info.ExactNeutral ? "" : "  [ratio fallback]") : ""));
+            var row = new[] { x, y, info.NormalizedLevel, vanilla, r.LoadSupport, cmp, oldRule, now, expected, info.ExactNeutral ? 1f : 0f };
             P[label] = row;
             return row;
         };
+        Func<string, float[]> Row = k => P[k];
+        Func<string, bool> Exact = k => Near(Row(k)[NOW], Row(k)[EXP], 0.002f);
+        Func<float, HediffDef> ArmPart = eff => Prosthetic("TestArm" + (eff * 100f).ToString("0"), eff);
+        Func<string, float, Pawn> ArmsAt = (name, eff) =>
+        {
+            Pawn a = Human(name);
+            if (Math.Abs(eff - 1f) > 1e-6f) InstallAll(a, BodyPartTagDefOf.ManipulationLimbCore, ArmPart(eff));
+            return a;
+        };
         TestConsciousness = 1f;
 
+        Console.WriteLine("\n--- Core cases ---"); header();
         p = Human("C01"); Pipe("01 healthy human", p, 75f);
-        p = Human("C02"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("02 missing one arm", p, 75f);
-        p = Human("C03"); foreach (var a in Parts(p, BodyPartTagDefOf.ManipulationLimbCore)) Injure(p, a, 18f); Pipe("03 both arms compromised (shoulders 40% HP)", p, 75f);
-        p = Human("C03b"); foreach (var a in Parts(p, BodyPartTagDefOf.ManipulationLimbCore)) RemovePart(p, a); Pipe("03b both arms missing (uncorrectable: 0)", p, 0f);
+        p = Human("C02"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("02 missing one arm", p, 75f * 0.5f);
+        p = Human("C03"); foreach (var a in Parts(p, BodyPartTagDefOf.ManipulationLimbCore)) Injure(p, a, 18f); Pipe("03 both arms compromised (shoulders 40% HP)", p, 75f * 0.33f);
+        p = Human("C03b"); foreach (var a in Parts(p, BodyPartTagDefOf.ManipulationLimbCore)) RemovePart(p, a); Pipe("03b both arms missing", p, 0f);
         p = Human("C04"); Install(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0], bionicArm); Pipe("04 one bionic arm", p, 75f);
         p = Human("C05"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("05 two bionic arms", p, 75f);
         p = Human("C06"); InstallAll(p, BodyPartTagDefOf.MovingLimbCore, bionicLeg); Pipe("06 two bionic legs only", p, 75f);
@@ -475,64 +518,169 @@ static class IntegrationTests
         p = Human("C12"); InstallAll(p, BodyPartTagDefOf.MovingLimbCore, mod5Leg); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, mod5Arm);
         Install(p, Parts(p, BodyPartTagDefOf.Spine)[0], mod5Spine); Install(p, Parts(p, BodyPartTagDefOf.Pelvis)[0], mod5Pelvis); PartOffset(p, p.RaceProps.body.corePart, 4f);
         Pipe("12 modded 500% full body", p, 75f);
-        p = Human("C13"); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0.5f); Pipe("13 capMod Manipulation +50% (vanilla kept)", p, 75f * 1.5f);
-        p = Human("C13b"); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0.5f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("13b capMod Manip +50% AND bionic arms", p, 75f * 1.5f);
-        TestConsciousness = 0.5f;
-        p = Human("C13c"); Pipe("13c consciousness 50% (vanilla kept)", p, 75f * 0.5f);
-        p = Human("C13d"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("13d consciousness 50% + bionic arms", p, 75f * 0.5f);
-        TestConsciousness = 1f;
         p = Human("C14"); CarryStatModifier(p, 0f, 2f); Pipe("14 direct CarryingCapacity factor x2", p, 150f);
         p = Human("C14b"); CarryStatModifier(p, 0f, 2f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("14b factor x2 + bionic arms", p, 150f);
+        p = Human("C14c"); CarryStatModifier(p, 0f, 2f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm); Pipe("14c factor x2 + 300% arms", p, 150f);
         p = Human("C15"); CarryStatModifier(p, 50f, 1f); Pipe("15 direct CarryingCapacity offset +50", p, 125f);
-        p = Human("C15b"); CarryStatModifier(p, 50f, 1f); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("15b offset +50 + missing arm", p, 125f);
-        p = Human("C17", 1.5f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("17 body size 1.5 (StatPart_BodySize) + bionic arms", p, 75f * 1.5f);
+        p = Human("C15b"); CarryStatModifier(p, 50f, 1f); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("15b offset +50 + missing arm", p, 125f * 0.5f);
+        p = Human("C15c"); CarryStatModifier(p, 50f, 1f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm); Pipe("15c offset +50 + 300% arms", p, 125f);
+        p = Human("C17", 1.5f); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("17 body size 1.5 + bionic arms", p, 75f * 1.5f);
+        p = Human("C17b", 1.5f); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("17b body size 1.5 + missing arm", p, 75f * 1.5f * 0.5f);
+
+        Console.WriteLine("\n--- Weak-limb series (both arms replaced by parts of the given efficiency; 100% = natural arms) ---"); header();
+        float[] weak = { 1f, 0.85f, 0.6f, 0.5f, 0.25f, 0.1f, 0.01f, 0f };
+        var weakKeys = new List<string>();
+        foreach (float e in weak)
+        {
+            string k = "W arms " + (e * 100f).ToString("0") + "%";
+            p = ArmsAt("W" + (e * 1000f).ToString("0"), e);
+            Pipe(k, p, 75f * GenMath.RoundedHundredth(e)); // vanilla Manipulation = RoundedHundredth(limbs) at consciousness 100%
+            weakKeys.Add(k);
+        }
+
+        Console.WriteLine("\n--- Superhuman series (both arms) ---"); header();
+        float[] strong = { 1f, 1.25f, 1.5f, 3f, 5f };
+        var strongKeys = new List<string>();
+        foreach (float e in strong)
+        {
+            string k = "S arms " + (e * 100f).ToString("0") + "%";
+            p = ArmsAt("S" + (e * 100f).ToString("0"), e);
+            Pipe(k, p, 75f);
+            strongKeys.Add(k);
+        }
+
+        Console.WriteLine("\n--- Prosthetics ---"); header();
+        var simpleArm = Prosthetic("SimpleProstheticArm", 0.85f);
+        p = Human("PR1"); Install(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0], simpleArm); Pipe("P one simple prosthetic arm (85%)", p, 75f * GenMath.RoundedHundredth(0.925f));
+        p = Human("PR2"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, simpleArm); Pipe("P two simple prosthetic arms (85%)", p, 75f * 0.85f);
+        p = Human("PR3"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, Prosthetic("PoorModArm", 0.6f)); Pipe("P poor modded prosthetic arms (60%)", p, 75f * 0.6f);
+        p = Human("PR4"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, bionicArm); Pipe("P bionic arms (125%)", p, 75f);
+        p = Human("PR5"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, archoArm); Pipe("P archotech arms (150%)", p, 75f);
+        p = Human("PR6"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm); Pipe("P modded arms (300%)", p, 75f);
+        p = Human("PR7"); InstallAll(p, BodyPartTagDefOf.ManipulationLimbCore, mod5Arm); Pipe("P modded arms (500%)", p, 75f);
+        p = Human("PR8"); Install(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0], archoArm); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[1]); Pipe("P archotech arm + missing arm (75%)", p, 75f * 0.75f);
+
+        Console.WriteLine("\n--- Manipulation capMods (whole-body hediffs): systemic part must survive limb normalisation ---"); header();
+        var capKeys = new List<KeyValuePair<string, float>>();
+        foreach (float off in new[] { 0.5f, -0.25f })
+            foreach (float e in off > 0f ? new[] { 1f, 1.25f, 3f, 5f } : new[] { 1f, 1.25f, 3f })
+            {
+                string k = "M arms " + (e * 100f).ToString("0") + "% + Manip " + (off > 0 ? "+" : "") + (off * 100f).ToString("0") + "%";
+                p = ArmsAt("M" + (e * 100f).ToString("0") + "_" + (off * 100f).ToString("0"), e);
+                WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, off);
+                Pipe(k, p, 75f * (1f + off));
+                capKeys.Add(new KeyValuePair<string, float>(k, off));
+            }
+        p = Human("M_arm_neg"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, -0.25f);
+        Pipe("M missing arm + Manip -25% (weak: vanilla kept)", p, 75f * 0.25f);
+        p = ArmsAt("M_post", 3f); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0f, 0.8f); Pipe("M arms 300% + Manip postFactor x0.8", p, 75f * 0.8f);
+        p = ArmsAt("M_both", 3f); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0.5f, 0.8f); Pipe("M arms 300% + Manip +50% & x0.8", p, 75f * 1.5f * 0.8f);
+        p = ArmsAt("M_max", 3f); ManipSetMax(p, 1.2f); Pipe("M arms 300% + Manip setMax 120%", p, 75f);
+        p = ArmsAt("M_max2", 3f); ManipSetMax(p, 0.7f); Pipe("M arms 300% + Manip setMax 70%", p, 75f * 0.7f);
+
+        Console.WriteLine("\n--- Consciousness ---"); header();
+        TestConsciousness = 0.5f;
+        p = Human("K1"); Pipe("K consciousness 50%, healthy arms", p, 75f * 0.5f);
+        p = ArmsAt("K2", 1.25f); Pipe("K consciousness 50% + bionic arms", p, 75f * 0.5f);
+        p = ArmsAt("K3", 3f); Pipe("K consciousness 50% + 300% arms", p, 75f * 0.5f);
+        p = Human("K4"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("K consciousness 50% + missing arm", p, 75f * 0.25f);
+        p = ArmsAt("K5", 3f); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0.5f); Pipe("K consciousness 50% + 300% arms + Manip +50%", p, 75f * 1.0f);
+        TestConsciousness = 1f;
 
         Console.WriteLine("\n=== Pipeline assertions ===");
-        Func<string, float[]> Row = k => P[k];
-        const int LSV = 2, COMP = 3, OLD = 4, NOW = 5, EXP = 6;
-        // Vanilla rounds capacity levels to 0.01, so a result can differ from the ideal by up to ~0.005/Manip (relative).
         foreach (var kv in P)
-        {
-            if (kv.Key.StartsWith("13b")) continue; // additive offset + non-100% limbs: documented approximation, checked below
-            float tol = Math.Max(0.002f, kv.Value[0] > 0f ? 0.0051f / kv.Value[0] : 0f);
-            Check("pipeline result == non-duplicated base x Load Support (tol " + (tol * 100f).ToString("0.0") + "%): " + kv.Key, Near(kv.Value[NOW], kv.Value[EXP], tol));
-        }
-        float[] r13b = Row("13b capMod Manip +50% AND bionic arms");
-        Check("13b additive capMod + bionic arms: between the multiplicative (x1.4) and additive (x1.5) readings, and below the old double count",
-            r13b[NOW] >= 75f * 1.4f * r13b[LSV] - 0.1f && r13b[NOW] <= 75f * 1.5f * r13b[LSV] + 0.1f && r13b[NOW] < r13b[OLD]);
-        Check("03 both arms compromised: rounding-exact (compensation undoes vanilla's factor completely)", Near(Row("03 both arms compromised (shoulders 40% HP)")[NOW], Row("03 both arms compromised (shoulders 40% HP)")[EXP], 0.002f));
+            Check("pipeline result == expected (tol 0.2%): " + kv.Key + "  (" + kv.Value[NOW].ToString("0.0") + " vs " + kv.Value[EXP].ToString("0.0") + ")", Exact(kv.Key));
         Check("01 healthy = exactly 75", Math.Abs(Row("01 healthy human")[NOW] - 75f) < 0.01f);
-        Check("02 missing one arm: no double punishment (new > vanilla x LS)", Row("02 missing one arm")[NOW] > Row("02 missing one arm")[OLD] * 1.5f);
-        Check("05 two bionic arms: vanilla's x1.25 removed (new = 75 x LS, not 93.75 x LS)", Near(Row("05 two bionic arms")[NOW], 75f * Row("05 two bionic arms")[LSV], 0.002f) && Row("05 two bionic arms")[OLD] > Row("05 two bionic arms")[NOW] * 1.2f);
-        Check("06 bionic legs only: no Manipulation change -> compensation exactly 1", Math.Abs(Row("06 two bionic legs only")[COMP] - 1f) < 1e-5f);
-        Check("11 THE BUG: 300% full body = 75 x 15.59 ~ 1169 kg (was ~3508)", Near(Row("11 modded 300% full body")[NOW], 1169.1f, 0.01f) && Row("11 modded 300% full body")[OLD] > 3400f);
-        Check("12 500% full body = 75 x 55.9 ~ 4193 kg (was ~5x more)", Near(Row("12 modded 500% full body")[NOW], 75f * 55.9f, 0.01f) && Row("12 modded 500% full body")[OLD] > 4.9f * Row("12 modded 500% full body")[NOW]);
-        Check("13 whole-body Manipulation capMod: vanilla x1.5 preserved exactly once", Near(Row("13 capMod Manipulation +50% (vanilla kept)")[NOW], 112.5f, 0.005f));
-        Check("13c consciousness 50%: vanilla x0.5 preserved (not erased by the correction)", Near(Row("13c consciousness 50% (vanilla kept)")[NOW], 37.5f, 0.005f));
-        Check("14 stat factor x2 preserved", Near(Row("14 direct CarryingCapacity factor x2")[NOW], 150f, 0.005f));
-        Check("15 stat offset +50 preserved", Near(Row("15 direct CarryingCapacity offset +50")[NOW], 125f, 0.005f));
-        Check("03b both arms missing: vanilla 0 stands (uncorrectable, compensation 1)", Row("03b both arms missing (uncorrectable: 0)")[NOW] < 0.001f && Math.Abs(Row("03b both arms missing (uncorrectable: 0)")[COMP] - 1f) < 1e-6f);
+        Check("02 missing one arm: vanilla x0.5 retained, LS 0.95 on top -> 35.6 kg (was 71.3)", Near(Row("02 missing one arm")[NOW], 35.6f, 0.005f) && Math.Abs(Row("02 missing one arm")[COMP] - 1f) < 1e-6f);
+        Check("03 both arms ~33%: 75 x 0.33 x 0.925 ~ 22.9 kg (was 69.4)", Near(Row("03 both arms compromised (shoulders 40% HP)")[NOW], 22.9f, 0.005f));
+        Check("03b both arms missing: 0", Row("03b both arms missing")[NOW] < 0.001f);
+        Check("05 two bionic arms: vanilla's x1.25 removed (= 75 x LS)", Near(Row("05 two bionic arms")[NOW], 75f * Row("05 two bionic arms")[LSV], 0.002f) && Row("05 two bionic arms")[COMP] < 0.81f);
+        Check("06 bionic legs only: compensation exactly 1", Math.Abs(Row("06 two bionic legs only")[COMP] - 1f) < 1e-6f);
+        Check("11 THE BUG stays fixed: 300% full body = 75 x 15.59 ~ 1169 kg (not ~3508)", Near(Row("11 modded 300% full body")[NOW], 1169.1f, 0.01f));
+        Check("12 500% full body = 75 x 55.9 ~ 4193 kg (not ~20963)", Near(Row("12 modded 500% full body")[NOW], 75f * 55.9f, 0.01f));
+        Check("14/15 direct stat factor x2 and offset +50 preserved", Near(Row("14 direct CarryingCapacity factor x2")[NOW], 150f, 0.005f) && Near(Row("15 direct CarryingCapacity offset +50")[NOW], 125f, 0.005f));
+
+        bool weakComp = true, weakMono = true;
+        for (int i = 0; i < weakKeys.Count; i++)
+        {
+            weakComp &= Math.Abs(Row(weakKeys[i])[COMP] - 1f) < 1e-6f;
+            if (i > 0) weakMono &= Row(weakKeys[i])[NOW] <= Row(weakKeys[i - 1])[NOW] + 1e-4f;
+        }
+        Check("weak series: compensation exactly 1 for every limb level <= 100%", weakComp);
+        Check("weak series: carry is monotonic (100% >= 85% >= ... >= 0%)", weakMono);
+        Check("weak series: 1% arms carry < 1 kg (no cliff: 1% ~ 70 kg / 0% = 0 is gone)", Row("W arms 1%")[NOW] < 1f && Row("W arms 0%")[NOW] < 0.001f);
+        Check("weak series: 50% arms = 75 x 0.5 x 0.95 ~ 35.6 kg", Near(Row("W arms 50%")[NOW], 35.6f, 0.005f));
+        Check("weak series: every step is at or below the vanilla value (disability never compensated away)", weakKeys.TrueForAll(k => Row(k)[NOW] <= Row(k)[VAN] + 1e-3f));
+
+        bool strongMono = true, strongExact = true;
+        for (int i = 1; i < strongKeys.Count; i++)
+        {
+            strongMono &= Row(strongKeys[i])[NOW] > Row(strongKeys[i - 1])[NOW];
+            strongExact &= Row(strongKeys[i])[EXACT] == 1f && Row(strongKeys[i])[COMP] < 1f;
+        }
+        Check("superhuman series: monotonic increasing 100% < 125% < 150% < 300% < 500%", strongMono);
+        Check("superhuman series: compensation active and exact (neutral-limb level) for every level > 100%", strongExact);
+        Check("superhuman series: 100% arms -> compensation exactly 1", Math.Abs(Row("S arms 100%")[COMP] - 1f) < 1e-6f);
+        Check("superhuman series: no double count (300% arms = 75 x LS, far below vanilla x LS)", Row("S arms 300%")[NOW] < 0.4f * Row("S arms 300%")[VAN] * Row("S arms 300%")[LSV]);
+
+        Check("prosthetics < 100% keep the vanilla penalty (compensation 1): one/two simple, poor 60%, archotech+missing",
+            new[] { "P one simple prosthetic arm (85%)", "P two simple prosthetic arms (85%)", "P poor modded prosthetic arms (60%)", "P archotech arm + missing arm (75%)" }
+                .All(k => Math.Abs(Row(k)[COMP] - 1f) < 1e-6f && Near(Row(k)[NOW], Row(k)[VAN] * Row(k)[LSV], 0.001f)));
+        Check("prosthetics > 100% activate the compensation: bionic, archotech, 300%, 500%",
+            new[] { "P bionic arms (125%)", "P archotech arms (150%)", "P modded arms (300%)", "P modded arms (500%)" }.All(k => Row(k)[COMP] < 1f && Row(k)[EXACT] == 1f));
+
+        foreach (float off in new[] { 0.5f, -0.25f })
+        {
+            var ks = capKeys.FindAll(kv => kv.Value == off).ConvertAll(kv => kv.Key);
+            bool same = ks.TrueForAll(k => Near(Row(k)[NOW] / Row(k)[LSV], 75f * (1f + off), 0.002f));
+            Check("additive Manip " + (off * 100f).ToString("+0;-0") + "%: systemic x" + (1f + off).ToString("0.00") + " identical at every limb level (" + string.Join(", ", ks.ConvertAll(k => (Row(k)[NOW] / Row(k)[LSV]).ToString("0.0")).ToArray()) + " kg before LS)", same);
+        }
+        Check("additive: bionic arms + Manip +50% = 75 x 1.5 x LS ~ 117 kg (PR#1 first revision gave ~109)", Near(Row("M arms 125% + Manip +50%")[NOW], 117.1f, 0.005f));
+        Check("consciousness 50% + bionic arms: neutral-limb level is 0.50, not 1.0 (x0.5 kept once)", Math.Abs(Row("K consciousness 50% + bionic arms")[Y1_] - 0.5f) < 1e-4f && Near(Row("K consciousness 50% + bionic arms")[NOW], 37.5f * Row("K consciousness 50% + bionic arms")[LSV], 0.002f));
+        Check("consciousness 50% + 300% arms: 75 x 0.5 x LS", Exact("K consciousness 50% + 300% arms"));
+
+        // ---- Custom / patched Manipulation worker (another mod) ----
+        Console.WriteLine("\n=== Patched Manipulation worker (another mod's Harmony postfix) ===");
+        MethodInfo manipWorker = AccessTools.Method(typeof(PawnCapacityWorker_Manipulation), "CalculateCapacityLevel");
+        MethodInfo moddedPostfix = typeof(IntegrationTests).GetMethod("ModdedManipulationWorker", BindingFlags.Static | BindingFlags.NonPublic);
+        harness.Patch(manipWorker, postfix: new HarmonyMethod(moddedPostfix));
+        header();
+        ModdedWorkerScale = 1f;
+        p = ArmsAt("H1", 1.25f); Pipe("H result-preserving patch + bionic arms", p, 75f);
+        p = ArmsAt("H1b", 3f); WholeBodyCapMod(p, PawnCapacityDefOf.Manipulation, 0.5f); Pipe("H result-preserving patch + 300% arms + Manip +50%", p, 75f * 1.5f);
+        ModdedWorkerScale = 1.2f;
+        p = ArmsAt("H2", 3f); Pipe("H worker x1.2 + 300% arms (fallback Y/X)", p, 75f * 1.2f);
+        p = Human("H3"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); Pipe("H worker x1.2 + missing arm (weak: vanilla kept)", p, 75f * 0.6f);
+        p = ArmsAt("H4", 0.6f); Pipe("H worker x1.2 + 60% arms (weak: vanilla kept)", p, 75f * GenMath.RoundedHundredth(0.72f));
+        ModdedWorkerScale = 1f;
+        harness.Unpatch(manipWorker, moddedPostfix);
+        Check("result-preserving patch on the vanilla worker: exact path still used", Row("H result-preserving patch + bionic arms")[EXACT] == 1f && Row("H result-preserving patch + 300% arms + Manip +50%")[EXACT] == 1f && Exact("H result-preserving patch + 300% arms + Manip +50%"));
+        Check("math-changing worker: detected, ratio fallback used, result = 75 x (Y/X) x LS", Row("H worker x1.2 + 300% arms (fallback Y/X)")[EXACT] == 0f && Exact("H worker x1.2 + 300% arms (fallback Y/X)"));
+        Check("math-changing worker: fallback never compensates weak limbs", Math.Abs(Row("H worker x1.2 + missing arm (weak: vanilla kept)")[COMP] - 1f) < 1e-6f && Math.Abs(Row("H worker x1.2 + 60% arms (weak: vanilla kept)")[COMP] - 1f) < 1e-6f
+              && Exact("H worker x1.2 + missing arm (weak: vanilla kept)") && Exact("H worker x1.2 + 60% arms (weak: vanilla kept)"));
 
         // ---- Different Manipulation factor configurations (compensation follows the runtime StatDef) ----
         Console.WriteLine("\n=== Runtime factor configurations ===");
         Pawn arms125 = Human("CfgBionicArms"); InstallAll(arms125, BodyPartTagDefOf.ManipulationLimbCore, bionicArm);
         Pawn oneArm = Human("CfgOneArm"); RemovePart(oneArm, Parts(oneArm, BodyPartTagDefOf.ManipulationLimbCore)[0]);
         Func<Pawn, float> expectLS = x => 75f * LoadSupportCache.GetResult(x, true).LoadSupport;
+        Func<Pawn, float> expectVanillaLS = x => CarryVanilla(x) * LoadSupportCache.GetResult(x, true).LoadSupport;
         Action<string> cfgRow = label =>
         {
             float a = Carry(arms125), av = CarryVanilla(arms125), b = Carry(oneArm), bv = CarryVanilla(oneArm);
             Console.WriteLine(string.Format("  {0,-44} bionic arms: vanilla {1,6:0.0} -> {2,6:0.0} (exp {3,6:0.0})   one arm: vanilla {4,6:0.0} -> {5,6:0.0} (exp {6,6:0.0})",
-                label, av, a, expectLS(arms125), bv, b, expectLS(oneArm)));
+                label, av, a, expectLS(arms125), bv, b, expectVanillaLS(oneArm)));
         };
+        Func<bool> cfgOk = () => Near(Carry(arms125), expectLS(arms125), 0.002f) && Near(Carry(oneArm), expectVanillaLS(oneArm), 0.002f);
         cfgRow("weight 1 (vanilla)");
         manipFactor.weight = 0.5f; cfgRow("weight 0.5");
-        Check("weight 0.5: vanilla's partial factor removed exactly", Near(Carry(arms125), expectLS(arms125), 0.002f) && Near(Carry(oneArm), expectLS(oneArm), 0.002f));
+        Check("weight 0.5: superhuman share removed exactly; weak arm keeps vanilla's partial factor", cfgOk());
         manipFactor.weight = 1f; manipFactor.max = 1f; cfgRow("max 1.0 (bionic bonus capped by vanilla)");
-        Check("max 1.0: capped factor handled exactly", Near(Carry(arms125), expectLS(arms125), 0.002f) && Near(Carry(oneArm), expectLS(oneArm), 0.002f));
+        Check("max 1.0: capped factor handled exactly", cfgOk());
         manipFactor.max = 9999f; manipFactor.allowedDefect = 0.2f; cfgRow("allowedDefect 0.2");
-        Check("allowedDefect 0.2: InverseLerp defect curve handled exactly", Near(Carry(arms125), expectLS(arms125), 0.002f) && Near(Carry(oneArm), expectLS(oneArm), 0.002f));
+        Check("allowedDefect 0.2: InverseLerp defect curve handled exactly", cfgOk());
         manipFactor.allowedDefect = 0f; manipFactor.useReciprocal = true; cfgRow("useReciprocal (odd, but must stay exact)");
-        Check("useReciprocal: handled exactly", Near(Carry(arms125), expectLS(arms125), 0.002f) && Near(Carry(oneArm), expectLS(oneArm), 0.002f));
+        Check("useReciprocal: handled exactly", cfgOk());
         manipFactor.useReciprocal = false;
         carryStat.capacityFactors = new List<PawnCapacityFactor>(); cfgRow("no Manipulation factor at all");
         Check("no Manipulation factor: compensation is exactly 1 and result = 75 x LS",
@@ -545,6 +693,62 @@ static class IntegrationTests
                           + ", carry " + Carry(legs125).ToString("0.0") + " (exp " + (movingLevel * expectLS(legs125)).ToString("0.0") + ")");
         Check("a non-Manipulation capacity factor from another mod is preserved (not compensated)", Near(Carry(legs125), movingLevel * expectLS(legs125), 0.005f));
         carryStat.capacityFactors = new List<PawnCapacityFactor> { manipFactor };
+
+        // ---- Other mods' StatParts running BEFORE Parametric's ----
+        Console.WriteLine("\n=== Other mods' StatParts inserted BEFORE StatPart_LoadSupport ===");
+        var spPawns = new List<KeyValuePair<string, Pawn>>();
+        spPawns.Add(new KeyValuePair<string, Pawn>("healthy", Human("SP1")));
+        p = Human("SP2"); RemovePart(p, Parts(p, BodyPartTagDefOf.ManipulationLimbCore)[0]); spPawns.Add(new KeyValuePair<string, Pawn>("missing one arm", p));
+        spPawns.Add(new KeyValuePair<string, Pawn>("bionic arms", ArmsAt("SP3", 1.25f)));
+        spPawns.Add(new KeyValuePair<string, Pawn>("300% arms", ArmsAt("SP4", 3f)));
+        spPawns.Add(new KeyValuePair<string, Pawn>("300% full body", full3));
+        var baseline = new Dictionary<string, float>();
+        foreach (var kv in spPawns) baseline[kv.Key] = Carry(kv.Value);
+        int ourIndex = carryStat.parts.FindIndex(x => x is StatPart_LoadSupport);
+
+        var mulPart = new TestStatPart { parentStat = carryStat, factor = 2f };
+        carryStat.parts.Insert(ourIndex, mulPart);
+        bool mulOk = true;
+        foreach (var kv in spPawns)
+        {
+            float v = Carry(kv.Value);
+            Console.WriteLine(string.Format("  x2 part    {0,-18} {1,8:0.0} kg  (without part {2,8:0.0}, exp x2 {3,8:0.0})", kv.Key, v, baseline[kv.Key], 2f * baseline[kv.Key]));
+            mulOk &= Near(v, 2f * baseline[kv.Key], 0.001f);
+        }
+        carryStat.parts.Remove(mulPart);
+        Check("multiplicative StatPart before Parametric: exactly x2 for every pawn (multiplication commutes)", mulOk);
+
+        var addPart = new TestStatPart { parentStat = carryStat, add = 100f };
+        carryStat.parts.Insert(ourIndex, addPart);
+        bool addWeakOk = true;
+        float addErr300 = 0f, addErrFull = 0f;
+        foreach (var kv in spPawns)
+        {
+            LoadSupportResult r = LoadSupportCache.GetResult(kv.Value, true);
+            float cmp = ManipulationCompensation.Compute(carryStat, kv.Value, r);
+            float v = Carry(kv.Value);
+            float vanillaComposed = CarryVanilla(kv.Value) - 100f;               // vanilla CarryingCapacity before the +100 part
+            float ideal = (vanillaComposed * cmp + 100f) * r.LoadSupport;         // +100 kg compensated neither way, then scaled by LS
+            float predicted = (vanillaComposed + 100f) * cmp * r.LoadSupport;     // late multiplicative correction
+            Console.WriteLine(string.Format("  +100 part  {0,-18} {1,8:0.0} kg  comp {2,5:0.000}  LS {3,6:0.000}  | ideal {4,8:0.0}  predicted {5,8:0.0}  | +100 kg counts as {6,6:0.0} kg before LS",
+                kv.Key, v, cmp, r.LoadSupport, ideal, predicted, 100f * cmp));
+            if (cmp == 1f) addWeakOk &= Near(v, ideal, 0.001f);
+            if (kv.Key == "300% arms") addErr300 = v - ideal;
+            if (kv.Key == "300% full body") addErrFull = v - ideal;
+            Check("additive StatPart (" + kv.Key + "): result = (vanilla + 100) x comp x LS, as documented", Near(v, predicted, 0.001f));
+        }
+        carryStat.parts.Remove(addPart);
+        Console.WriteLine("  => difference vs ideal: 300% arms " + addErr300.ToString("0.0") + " kg, 300% full body " + addErrFull.ToString("0.0") + " kg");
+        Check("additive StatPart: pawns with limbs <= 100% are unaffected by the limitation (exact)", addWeakOk);
+
+        // ---- MassUtility is untouched by Manipulation compensation ----
+        Console.WriteLine("\n=== MassUtility has no Manipulation factor: never compensated ===");
+        foreach (var kv in spPawns)
+        {
+            float m = MassUtility.Capacity(kv.Value, null), ls = LoadSupportCache.Get(kv.Value);
+            Console.WriteLine(string.Format("  {0,-18} mass {1,7:0.0} kg = 35 x LS {2,6:0.000}", kv.Key, m, ls));
+            Check("mass = 35 x LS (no compensation): " + kv.Key, Math.Abs(m - 35f * ls) < 1e-3f * Math.Max(1f, m));
+        }
 
         // ================= MassUtility.Capacity =================
         Console.WriteLine("\n=== MassUtility.Capacity (caravan / inventory) through the real patched method ===");
@@ -614,7 +818,14 @@ static class IntegrationTests
         LoadSupportCache.Get(t);
         Bench("cached lookup", 2000000, () => LoadSupportCache.Get(t));
         LoadSupportResult tr = LoadSupportCache.GetResult(t);
-        double comp = Bench("manipulation compensation", 2000000, () => ManipulationCompensation.Compute(carryStat, t, tr));
+        double comp = Bench("manipulation compensation, superhuman arms (exact path)", 2000000, () => ManipulationCompensation.Compute(carryStat, t, tr));
+        Pawn tw = Human("TimingWeak"); RemovePart(tw, Parts(tw, BodyPartTagDefOf.ManipulationLimbCore)[0]);
+        LoadSupportResult twr = LoadSupportCache.GetResult(tw);
+        Bench("manipulation compensation, limbs <= 100% (early out)", 2000000, () => ManipulationCompensation.Compute(carryStat, tw, twr));
+        Pawn tm3 = Human("TimingMods"); InstallAll(tm3, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm);
+        WholeBodyCapMod(tm3, PawnCapacityDefOf.Manipulation, 0.5f); WholeBodyCapMod(tm3, PawnCapacityDefOf.Moving, 0.2f); Injure(tm3, tm3.RaceProps.body.corePart, 5f);
+        LoadSupportResult tm3r = LoadSupportCache.GetResult(tm3);
+        Bench("manipulation compensation, 300% arms + 3 other hediffs", 2000000, () => ManipulationCompensation.Compute(carryStat, tm3, tm3r));
         Bench("whole StatPart.TransformValue (cached LS + compensation)", 1000000, () => { float v = 75f; carryStat.parts[1].TransformValue(StatRequest.For(t), ref v); });
         double pipeOn = Bench("GetStatValue(CarryingCapacity) with Parametric", 200000, () => Carry(t));
         double pipeOff = Bench("GetStatValue(CarryingCapacity) Parametric bypassed", 200000, () => CarryVanilla(t));
