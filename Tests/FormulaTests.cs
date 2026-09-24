@@ -1,8 +1,8 @@
 // Standalone test harness for LoadSupportFormula (no RimWorld needed).
-// Build: mcs -out:FormulaTests.exe Tests/FormulaTests.cs Source/LoadSupport/Core/LoadSupportFormula.cs && mono FormulaTests.exe
+// Build: mcs -out:FormulaTests.exe Tests/FormulaTests.cs Source/Parametric/LoadSupport/LoadSupportFormula.cs && mono FormulaTests.exe
 using System;
 using System.Collections.Generic;
-using LoadSupport;
+using Parametric.LoadSupport;
 
 static class FormulaTests
 {

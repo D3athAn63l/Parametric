@@ -1,17 +1,22 @@
+using Parametric.LoadSupport;
 using Verse;
 
-namespace LoadSupport
+namespace Parametric
 {
-    public class LoadSupportSettings : ModSettings
+    /// <summary>
+    /// Mod settings for Parametric. Stored in RimWorld's Config folder, never in save files.
+    /// Fields are grouped per module; v0.1 has only the Load Support module plus mod-level debug logging.
+    /// </summary>
+    public class ParametricSettings : ModSettings
     {
-        public const bool DefaultEnabled = true;
+        // ---------------- Load Support module ----------------
+        public const bool DefaultLoadSupportEnabled = true;
         public const bool DefaultApplyToMassCapacity = true;
         public const bool DefaultIncludeNonHumanlike = true;
         public const bool DefaultShowInInspectPane = false;
-        public const bool DefaultDebugLogging = false;
 
-        /// <summary>Master switch. Off = the mod changes nothing (StatPart and postfixes become no-ops).</summary>
-        public bool enabled = DefaultEnabled;
+        /// <summary>Module switch. Off = Load Support changes nothing (StatPart and postfixes become no-ops).</summary>
+        public bool loadSupportEnabled = DefaultLoadSupportEnabled;
 
         /// <summary>Strength = efficiency ^ exponent for efficiency above 100%.</summary>
         public float superhumanExponent = LoadSupportFormula.DefaultExponent;
@@ -23,13 +28,15 @@ namespace LoadSupport
         public bool includeNonHumanlike = DefaultIncludeNonHumanlike;
 
         public bool showInInspectPane = DefaultShowInInspectPane;
+
+        // ---------------- Mod-level ----------------
+        public const bool DefaultDebugLogging = false;
         public bool debugLogging = DefaultDebugLogging;
 
         public override void ExposeData()
         {
             base.ExposeData();
-            // Mod settings live in the RimWorld Config folder, never in save files.
-            Scribe_Values.Look(ref enabled, "enabled", DefaultEnabled);
+            Scribe_Values.Look(ref loadSupportEnabled, "loadSupportEnabled", DefaultLoadSupportEnabled);
             Scribe_Values.Look(ref superhumanExponent, "superhumanExponent", LoadSupportFormula.DefaultExponent);
             Scribe_Values.Look(ref applyToMassCapacity, "applyToMassCapacity", DefaultApplyToMassCapacity);
             Scribe_Values.Look(ref includeNonHumanlike, "includeNonHumanlike", DefaultIncludeNonHumanlike);
@@ -42,7 +49,7 @@ namespace LoadSupport
 
         public void ResetToDefaults()
         {
-            enabled = DefaultEnabled;
+            loadSupportEnabled = DefaultLoadSupportEnabled;
             superhumanExponent = LoadSupportFormula.DefaultExponent;
             applyToMassCapacity = DefaultApplyToMassCapacity;
             includeNonHumanlike = DefaultIncludeNonHumanlike;
@@ -50,10 +57,10 @@ namespace LoadSupport
             debugLogging = DefaultDebugLogging;
         }
 
-        /// <summary>Single gate used by every integration point.</summary>
-        public bool AppliesTo(Pawn pawn)
+        /// <summary>Single gate used by every Load Support integration point.</summary>
+        public bool LoadSupportAppliesTo(Pawn pawn)
         {
-            if (!enabled || pawn == null) return false;
+            if (!loadSupportEnabled || pawn == null) return false;
             RaceProperties race = pawn.RaceProps;
             if (race == null) return false;
             if (!includeNonHumanlike && !race.Humanlike) return false;

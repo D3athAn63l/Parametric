@@ -1,6 +1,6 @@
 using System;
 
-namespace LoadSupport
+namespace Parametric.LoadSupport
 {
     /// <summary>
     /// Pure math for turning three body-region efficiencies into a single LoadSupport multiplier.

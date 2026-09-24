@@ -80,102 +80,185 @@
   ok:   uniform sweep monotonic
   ok:   no discontinuity around 100% (max step < 0.05)
   ok:   200k random inputs (incl. negative, absent regions, bad exponents) always valid
-  info: formula cost 0.141 ?s/call (sink 1179415)
+  info: formula cost 0.139 µs/call (sink 1179415)
 
 ALL FORMULA TESTS PASSED
 
 ### Integration tests
-=== Harmony: applying mod patches to real 1.6 methods ===
+=== Harmony: applying Parametric's patches to real 1.6 methods ===
   patched: RimWorld.MassUtility.Capacity(Pawn, StringBuilder)
   patched: Verse.HediffSet.DirtyCache()
   patched: Verse.Pawn.GetInspectString()
-  ok:   exactly 3 methods patched
+  ok:   Harmony ID is aRed.Parametric
+  ok:   exactly 3 methods patched by Parametric
   ok:   MassUtility.Capacity(Pawn, StringBuilder) patched
   ok:   HediffSet.DirtyCache() patched
   ok:   Pawn.GetInspectString() patched
+  ok:   no leftover patches owned by the old ID aRed.LoadSupport
 
-=== StatPart injection ===
-  ok:   part list created, exactly one LoadSupport part
-  ok:   parentStat set, runs last (priority)
-  ok:   immutable flag cleared so the StatWorker does not cache forever
+=== StatPart injection & ordering ===
+  ok:   idempotent: exactly one StatPart_LoadSupport
+  ok:   appended AFTER existing parts (vanilla StatPart_BodySize stays first, untouched)
+  ok:   parentStat set
+  ok:   immutable flag cleared on injection (otherwise StatWorker caches forever)
 
-=== Body scenarios (real vanilla PawnCapacityUtility on synthetic bodies) ===
-01 healthy human                             L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
-02 missing one leg                           L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  stat75->  48.8  mass  22.8
-03 missing both legs                         L  0.00->  0.00  C  1.00->  1.00  U  1.00->  1.00  bneck 0.10  LS  0.050  stat75->   3.8  mass   1.8
-04a peg leg (0.6)                            L  0.80->  0.80  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.881  stat75->  66.1  mass  30.8
-04b simple prosthetic leg (0.85)             L  0.93->  0.93  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  0.958  stat75->  71.8  mass  33.5
-05 one bionic leg                            L  1.13->  1.34  C  1.00->  1.00  U  1.00->  1.00  bneck 0.99  LS  1.162  stat75->  87.2  mass  40.7
-06 two bionic legs                           L  1.25->  1.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.95  LS  1.307  stat75->  98.0  mass  45.8
-07 full vanilla bionics                      L  1.25->  1.75  C  1.10->  1.27  U  1.25->  1.75  bneck 0.97  LS  1.529  stat75-> 114.7  mass  53.5
-08 archotech legs+arms, bionic spine         L  1.50->  2.76  C  1.10->  1.27  U  1.50->  2.76  bneck 0.86  LS  1.913  stat75-> 143.5  mass  67.0
-09/10 modded 300% legs, normal core          L  3.00-> 15.59  C  1.00->  1.00  U  1.00->  1.00  bneck 0.25  LS  2.098  stat75-> 157.3  mass  73.4
-11 modded 300% legs + spine + pelvis         L  3.00-> 15.59  C  2.60-> 10.90  U  1.00->  1.00  bneck 0.98  LS 11.536  stat75-> 865.2  mass 403.7
-11b modded 300% everything (torso organic)   L  3.00-> 15.59  C  2.60-> 10.90  U  3.00-> 15.59  bneck 0.96  LS 13.405  stat75->1005.3  mass 469.2
-12 leg at 50% HP, torso at 70% HP            L  0.72->  0.72  C  0.94->  0.94  U  1.00->  1.00  bneck 0.97  LS  0.812  stat75->  60.9  mass  28.4
-12b missing one foot                         L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  stat75->  48.8  mass  22.8
-13 whole-body capMod Moving +100%            L  1.41->  2.38  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  1.470  stat75-> 110.3  mass  51.5
-13b capMods Moving/Manip -30%                L  0.84->  0.84  C  1.00->  1.00  U  0.84->  0.84  bneck 1.00  LS  0.892  stat75->  66.9  mass  31.2
-13c partEfficiencyOffset +0.5 on spine       L  1.00->  1.00  C  1.20->  1.58  U  1.00->  1.00  bneck 0.97  LS  1.163  stat75->  87.2  mass  40.7
-14 healthy pack animal (no arms)             L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
-14b pack animal missing one leg              L  0.75->  0.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.836  stat75->  62.7  mass  29.3
-15 no recognised anatomy (1 untagged part)   L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
-15b manipulators only, no legs/spine         L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
-15c manipulators only, one lost              L  1.00->  1.00  C  1.00->  1.00  U  0.67->  0.67  bneck 1.04  LS  0.940  stat75->  70.5  mass  32.9
+=== Body scenarios: real vanilla PawnCapacityUtility on synthetic bodies ===
+healthy human                                L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  mass   35.0
+missing one leg                              L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  mass   22.8
+missing both legs                            L  0.00->  0.00  C  1.00->  1.00  U  1.00->  1.00  bneck 0.10  LS  0.050  mass    1.8
+peg leg (0.6)                                L  0.80->  0.80  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.881  mass   30.8
+simple prosthetic leg (0.85)                 L  0.93->  0.93  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  0.958  mass   33.5
+one bionic leg                               L  1.13->  1.34  C  1.00->  1.00  U  1.00->  1.00  bneck 0.99  LS  1.162  mass   40.7
+two bionic legs                              L  1.25->  1.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.95  LS  1.307  mass   45.8
+full vanilla bionics                         L  1.25->  1.75  C  1.10->  1.27  U  1.25->  1.75  bneck 0.97  LS  1.529  mass   53.5
+archotech legs+arms, bionic spine            L  1.50->  2.76  C  1.10->  1.27  U  1.50->  2.76  bneck 0.86  LS  1.913  mass   67.0
+modded 300% legs, normal core                L  3.00-> 15.59  C  1.00->  1.00  U  1.00->  1.00  bneck 0.25  LS  2.098  mass   73.4
+modded 300% legs + spine + pelvis            L  3.00-> 15.59  C  2.60-> 10.90  U  1.00->  1.00  bneck 0.98  LS 11.536  mass  403.7
+leg 50% HP, torso 70% HP                     L  0.72->  0.72  C  0.94->  0.94  U  1.00->  1.00  bneck 0.97  LS  0.812  mass   28.4
+missing one foot                             L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  mass   22.8
+capMod Moving +100%                          L  1.41->  2.38  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  1.470  mass   51.5
+capMod Manipulation +100% (not in LS)        L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  mass   35.0
+partEfficiencyOffset +0.5 on spine           L  1.00->  1.00  C  1.20->  1.58  U  1.00->  1.00  bneck 0.97  LS  1.163  mass   40.7
+healthy pack animal (no arms)                L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  mass   35.0
+pack animal missing one leg                  L  0.75->  0.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.836  mass   29.3
+no recognised anatomy                        L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  mass   35.0
+manipulators only                            L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  mass   35.0
+manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U  0.67->  0.67  bneck 1.04  LS  0.940  mass   32.9
 
-=== Assertions ===
+=== Body assertions ===
   ok:   healthy human = 1.000
   ok:   healthy pack animal = 1.000
-  ok:   strange anatomy (blob) = 1.000, no exceptions
+  ok:   strange anatomy = 1.000
   ok:   tentacle anatomy healthy = 1.000
-  ok:   vanilla limb math: one leg missing -> lower efficiency 0.5
-  ok:   vanilla limb math: bionic leg -> 1.125 avg (children under added part count as 1.0)
-  ok:   vanilla limb math: two bionic legs -> 1.25
+  ok:   vanilla limb math: one leg missing -> lower 0.5
+  ok:   vanilla limb math: one bionic leg -> 1.125
   ok:   missing both legs: valid, heavily reduced
   ok:   peg < prosthetic < healthy < bionic1 < bionic2 < full bionic < archotech
-  ok:   bottleneck: modded legs on normal core < 2.5
-  ok:   legs + core much higher than legs alone (> 4x)
-  ok:   everything enhanced > legs + core
+  ok:   bottleneck: 300% legs on normal core in 1.8..2.5
+  ok:   legs + core > 4x legs alone
   ok:   injuries reduce
-  ok:   missing foot disables that limb exactly like vanilla Moving does (limb = leg x foot)
-  ok:   capMod +100% Moving: dampened (lower eff ~1.41, not 2.0)
-  ok:   negative capMods reduce
+  ok:   missing foot disables that limb like vanilla (limb = leg x foot)
+  ok:   Moving capMod +100%: dampened to ~1.41
+  ok:   Manipulation capMod NOT read into Load Support (vanilla factor keeps it, counted once)
   ok:   partEfficiencyOffset on spine raises core
   ok:   animal missing a leg: reduced
   ok:   tentacle anatomy with lost limb: reduced but valid
 
+=== FULL CarryingCapacity pipeline: pawn.GetStatValue(CarryingCapacity) through the real StatWorker ===
+  case                                         Manip   vanilla       LS     comp   OLD bug       NEW  expected
+  01 healthy human                              1.00      75.0    1.000    1.000      75.0      75.0      75.0
+  02 missing one arm                            0.50      37.5    0.950    2.000      35.6      71.3      71.3
+  03 both arms compromised (shoulders 40% HP)    0.33      24.8    0.925    3.030      22.9      69.4      69.4
+  03b both arms missing (uncorrectable: 0)      0.00       0.0    0.850    1.000       0.0       0.0       0.0
+  04 one bionic arm                             1.12      84.0    1.022    0.893      85.8      76.6      76.6
+  05 two bionic arms                            1.25      93.8    1.041    0.800      97.6      78.1      78.1
+  06 two bionic legs only                       1.00      75.0    1.307    1.000      98.0      98.0      98.0
+  07 full vanilla bionic                        1.25      93.8    1.529    0.800     143.3     114.7     114.7
+  08 archotech arms + legs                      1.50     112.5    1.663    0.667     187.1     124.7     124.7
+  09 modded 300% arms only                      3.00     225.0    1.132    0.333     254.7      84.9      84.9
+  10 modded 300% legs only                      1.00      75.0    2.098    1.000     157.3     157.3     157.3
+  11 modded 300% full body                      3.00     225.0   15.588    0.333    3507.4    1169.1    1169.1
+  12 modded 500% full body                      5.00     375.0   55.902    0.200   20963.1    4192.6    4192.6
+  13 capMod Manipulation +50% (vanilla kept)    1.50     112.5    1.000    1.000     112.5     112.5     112.5
+  13b capMod Manip +50% AND bionic arms         1.75     131.3    1.041    0.800     136.6     109.3     117.1
+  13c consciousness 50% (vanilla kept)          0.50      37.5    1.000    1.000      37.5      37.5      37.5
+  13d consciousness 50% + bionic arms           0.62      46.5    1.041    0.800      48.4      38.7      39.0
+  14 direct CarryingCapacity factor x2          1.00     150.0    1.000    1.000     150.0     150.0     150.0
+  14b factor x2 + bionic arms                   1.25     187.5    1.041    0.800     195.1     156.1     156.1
+  15 direct CarryingCapacity offset +50         1.00     125.0    1.000    1.000     125.0     125.0     125.0
+  15b offset +50 + missing arm                  0.50      62.5    0.950    2.000      59.4     118.8     118.8
+  17 body size 1.5 (StatPart_BodySize) + bionic arms    1.25     140.6    1.041    0.800     146.4     117.1     117.1
+
+=== Pipeline assertions ===
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 01 healthy human
+  ok:   pipeline result == non-duplicated base x Load Support (tol 1.0%): 02 missing one arm
+  ok:   pipeline result == non-duplicated base x Load Support (tol 1.5%): 03 both arms compromised (shoulders 40% HP)
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.2%): 03b both arms missing (uncorrectable: 0)
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 04 one bionic arm
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.4%): 05 two bionic arms
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 06 two bionic legs only
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.4%): 07 full vanilla bionic
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.3%): 08 archotech arms + legs
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.2%): 09 modded 300% arms only
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 10 modded 300% legs only
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.2%): 11 modded 300% full body
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.2%): 12 modded 500% full body
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.3%): 13 capMod Manipulation +50% (vanilla kept)
+  ok:   pipeline result == non-duplicated base x Load Support (tol 1.0%): 13c consciousness 50% (vanilla kept)
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.8%): 13d consciousness 50% + bionic arms
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 14 direct CarryingCapacity factor x2
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.4%): 14b factor x2 + bionic arms
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.5%): 15 direct CarryingCapacity offset +50
+  ok:   pipeline result == non-duplicated base x Load Support (tol 1.0%): 15b offset +50 + missing arm
+  ok:   pipeline result == non-duplicated base x Load Support (tol 0.4%): 17 body size 1.5 (StatPart_BodySize) + bionic arms
+  ok:   13b additive capMod + bionic arms: between the multiplicative (x1.4) and additive (x1.5) readings, and below the old double count
+  ok:   03 both arms compromised: rounding-exact (compensation undoes vanilla's factor completely)
+  ok:   01 healthy = exactly 75
+  ok:   02 missing one arm: no double punishment (new > vanilla x LS)
+  ok:   05 two bionic arms: vanilla's x1.25 removed (new = 75 x LS, not 93.75 x LS)
+  ok:   06 bionic legs only: no Manipulation change -> compensation exactly 1
+  ok:   11 THE BUG: 300% full body = 75 x 15.59 ~ 1169 kg (was ~3508)
+  ok:   12 500% full body = 75 x 55.9 ~ 4193 kg (was ~5x more)
+  ok:   13 whole-body Manipulation capMod: vanilla x1.5 preserved exactly once
+  ok:   13c consciousness 50%: vanilla x0.5 preserved (not erased by the correction)
+  ok:   14 stat factor x2 preserved
+  ok:   15 stat offset +50 preserved
+  ok:   03b both arms missing: vanilla 0 stands (uncorrectable, compensation 1)
+
+=== Runtime factor configurations ===
+  weight 1 (vanilla)                           bionic arms: vanilla   93.8 ->   78.1 (exp   78.1)   one arm: vanilla   37.5 ->   71.3 (exp   71.3)
+  weight 0.5                                   bionic arms: vanilla   84.4 ->   78.1 (exp   78.1)   one arm: vanilla   56.3 ->   71.3 (exp   71.3)
+  ok:   weight 0.5: vanilla's partial factor removed exactly
+  max 1.0 (bionic bonus capped by vanilla)     bionic arms: vanilla   75.0 ->   78.1 (exp   78.1)   one arm: vanilla   37.5 ->   71.3 (exp   71.3)
+  ok:   max 1.0: capped factor handled exactly
+  allowedDefect 0.2                            bionic arms: vanilla   93.8 ->   78.1 (exp   78.1)   one arm: vanilla   46.9 ->   71.3 (exp   71.3)
+  ok:   allowedDefect 0.2: InverseLerp defect curve handled exactly
+  useReciprocal (odd, but must stay exact)     bionic arms: vanilla   60.0 ->   78.1 (exp   78.1)   one arm: vanilla  150.0 ->   71.3 (exp   71.3)
+  ok:   useReciprocal: handled exactly
+  no Manipulation factor at all                bionic arms: vanilla   75.0 ->   78.1 (exp   78.1)   one arm: vanilla   75.0 ->   71.3 (exp   71.3)
+  ok:   no Manipulation factor: compensation is exactly 1 and result = 75 x LS
+  extra (non-Manipulation) Moving factor added by 'another mod': bionic legs Moving level 1.25, carry 122.5 (exp 122.5)
+  ok:   a non-Manipulation capacity factor from another mod is preserved (not compensated)
+
 === MassUtility.Capacity (caravan / inventory) through the real patched method ===
-  two bionic legs: vanilla 35.00 kg -> modded 45.75 kg
-  ok:   vanilla MassUtility base is 35 kg for body size 1
-  ok:   postfix multiplies by LoadSupport
-  ok:   master switch off -> vanilla 35 kg
-  ok:   master switch off -> stat untouched
+  bionic legs+arms: vanilla 35.00 kg -> 47.70 kg (LS 1.363)
+  ok:   vanilla MassUtility base = 35 kg at body size 1
+  ok:   mass = BodySize x 35 x LS, with NO Manipulation compensation
+  ok:   body size 1.5 healthy: 52.5 kg
+  ok:   module switch off -> mass vanilla
+  ok:   module switch off -> CarryingCapacity pipeline vanilla (incl. vanilla Manipulation x1.25)
   ok:   non-humanlike toggle off -> animal untouched
   ok:   non-humanlike toggle on -> animal reduced
-  ok:   debug bypass returns vanilla value
+  ok:   animal (no arms): CarryingCapacity compensation not applied
 
-=== Cache: time expiry, dirty marking, generation ===
-  ok:   within interval and not dirty -> cached value reused
-  ok:   after 250 ticks -> recomputed (picks up bionic legs)
-  ok:   MarkDirty -> immediate recompute (arm removed)
+=== Cache: dirty events, time expiry, settings generation, clock rollback, weak keys ===
+  ok:   refresh interval is 1000 ticks
+  ok:   silent change, within interval -> cached value reused
+  ok:   after 1000 ticks -> recomputed (picks up silent bionic legs)
+  ok:   REAL HediffSet.DirtyCache() -> immediate recompute within the interval
+  ok:   clock rollback (load) -> recompute
+  exponent 2.5 -> 1.0 with silent bionic legs: 1.000 -> 1.123
+  ok:   settings generation (InvalidateAll) -> recompute
+  ok:   weak keys: cache does not keep a discarded pawn alive
+  ok:   cached lookups allocate nothing measurable (0 bytes / 100k)
 
-  skip: vanilla DirtyCache needs more game state outside Unity (TypeInitializationException); postfix binding verified above
-  ok:   tick going backwards -> recompute
-  exponent 1.0: cached 1.000 -> after invalidate 1.123
-  ok:   InvalidateAll (settings change) -> recompute
-  info: 100k cached lookups allocated ~0 bytes (sink 112326)
-  ok:   cached lookups allocate (almost) nothing
-  info: full body evaluation 14.05 ?s/pawn (Mono JIT, outside Unity)
+=== Benchmarks (Mono JIT, outside Unity; in-game numbers will differ) ===
+  full body evaluation (uncached)                               12.146 µs
+  cached lookup                                                  0.134 µs
+  manipulation compensation                                      0.077 µs
+  whole StatPart.TransformValue (cached LS + compensation)       0.312 µs
+  GetStatValue(CarryingCapacity) with Parametric                 0.531 µs
+  GetStatValue(CarryingCapacity) Parametric bypassed             0.295 µs
+  => Parametric adds ~0.236 µs per CarryingCapacity evaluation; compensation itself ~0.077 µs
 
 === Log output captured during tests ===
   Tried to use an uninitialized DefOf of type BodyPartTagDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
   Tried to use an uninitialized DefOf of type PawnCapacityDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
+  Tried to use an uninitialized DefOf of type StatDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
   Used UnityData before it's initialized.
   Tried to get a resource "UI/Icons/LifeStage/VeryYoung" from a different thread. All resources must be loaded in the main thread.
   Tried to get a resource "UI/Icons/LifeStage/Young" from a different thread. All resources must be loaded in the main thread.
   Tried to get a resource "UI/Icons/LifeStage/Adult" from a different thread. All resources must be loaded in the main thread.
-  Tried to get a resource "Things/Pawn/Effects/Unhappy" from a different thread. All resources must be loaded in the main thread.
-  ok:   no errors logged
+  ok:   no errors and no Parametric log lines during tests (debug logging off)
 
-ALL INTEGRATION TESTS PASSED
-
+ALL 84 INTEGRATION CHECKS PASSED

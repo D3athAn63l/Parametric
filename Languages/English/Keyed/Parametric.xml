@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LanguageData>
 
-  <LoadSupport_ModName>Load Support</LoadSupport_ModName>
+  <!-- ===================== Parametric (mod level) ===================== -->
+  <Parametric_ModName>Parametric</Parametric_ModName>
+  <Parametric_SettingDebug>Debug logging</Parametric_SettingDebug>
+  <Parametric_SettingDebugDesc>Logs a full body breakdown whenever one of your pawns' Load Support value is first measured or changes, plus a startup report. Leave off during normal play. Dev-mode debug actions are available under "Parametric" regardless of this setting.</Parametric_SettingDebugDesc>
+  <Parametric_ResetDefaults>Reset to defaults</Parametric_ResetDefaults>
+
+  <!-- ===================== Load Support module ===================== -->
+  <LoadSupport_SectionHeader>Load Support</LoadSupport_SectionHeader>
+  <LoadSupport_SectionDesc>Carrying capacity derived from the current condition of each pawn's legs, core (spine, pelvis, torso) and arms. A healthy body is exactly x1.00.</LoadSupport_SectionDesc>
 
   <!-- Stat explanation (CarryingCapacity info card) -->
+  <LoadSupport_ManipulationCompensation>Manipulation limb share (measured by Load Support instead): {0} (limbs {1})</LoadSupport_ManipulationCompensation>
   <LoadSupport_StatExplanation>Load support (body condition): {0}</LoadSupport_StatExplanation>
   <LoadSupport_StatExplanationDetail>    lower body {0}, core {1}, upper body {2}</LoadSupport_StatExplanationDetail>
 
@@ -14,8 +23,8 @@
   <LoadSupport_InspectLine>Load support: {0}</LoadSupport_InspectLine>
 
   <!-- Settings -->
-  <LoadSupport_SettingEnabled>Enable body-based carrying capacity</LoadSupport_SettingEnabled>
-  <LoadSupport_SettingEnabledDesc>Multiply each pawn's carrying capacity by its LoadSupport, a value derived from the current condition of its legs, core (spine, pelvis, torso) and arms. A healthy body is exactly x1.00. Turning this off makes the mod change nothing.</LoadSupport_SettingEnabledDesc>
+  <LoadSupport_SettingEnabled>Enable Load Support</LoadSupport_SettingEnabled>
+  <LoadSupport_SettingEnabledDesc>Carrying capacity follows the body: legs, core and arms are measured through RimWorld's own part-efficiency system, and vanilla's Manipulation factor on carrying capacity is corrected so arms are not counted twice. Turning this off makes Load Support change nothing.</LoadSupport_SettingEnabledDesc>
 
   <LoadSupport_SettingExponent>Superhuman scaling exponent: {0}</LoadSupport_SettingExponent>
   <LoadSupport_SettingExponentDesc>Body regions above 100% efficiency are converted to strength as efficiency^exponent. 1.0 = linear. Below 100% efficiency the conversion is always linear.</LoadSupport_SettingExponentDesc>
@@ -27,12 +36,7 @@
   <LoadSupport_SettingNonHumanlike>Also apply to animals, mechanoids and other non-humanlike pawns</LoadSupport_SettingNonHumanlike>
   <LoadSupport_SettingNonHumanlikeDesc>Healthy bodies of any anatomy stay at x1.00; only injuries, missing limbs and replacement parts change the value. Turn off if a modded race or animal behaves strangely.</LoadSupport_SettingNonHumanlikeDesc>
 
-  <LoadSupport_SettingInspect>Show LoadSupport in the pawn inspect pane</LoadSupport_SettingInspect>
+  <LoadSupport_SettingInspect>Show Load Support in the pawn inspect pane</LoadSupport_SettingInspect>
   <LoadSupport_SettingInspectDesc>Adds a "Load support: x1.23" line to the selected pawn's inspect pane. The full breakdown is always visible in the Carrying capacity stat tooltip on the pawn's info card.</LoadSupport_SettingInspectDesc>
-
-  <LoadSupport_SettingDebug>Debug logging</LoadSupport_SettingDebug>
-  <LoadSupport_SettingDebugDesc>Logs a full body breakdown whenever a pawn's LoadSupport is first measured or changes. Also logs a startup report. Leave off during normal play. Dev-mode debug actions are available under "Load Support" regardless of this setting.</LoadSupport_SettingDebugDesc>
-
-  <LoadSupport_ResetDefaults>Reset to defaults</LoadSupport_ResetDefaults>
 
 </LanguageData>
