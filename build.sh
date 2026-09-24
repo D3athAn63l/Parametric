@@ -11,12 +11,13 @@ API="${MONO_API:-/usr/lib/mono/4.7.2-api}"
 NETSTD="$RIMWORLD_MANAGED/netstandard.dll"; [ -f "$NETSTD" ] || NETSTD="$API/Facades/netstandard.dll"
 mkdir -p 1.6/Assemblies
 mcs -target:library -optimize+ -nostdlib -noconfig -langversion:7.2 -warn:4 \
-  -out:1.6/Assemblies/LoadSupport.dll \
+  -out:1.6/Assemblies/Parametric.dll \
   -r:"$API/mscorlib.dll" -r:"$API/System.dll" -r:"$API/System.Core.dll" -r:"$NETSTD" \
   -r:"$RIMWORLD_MANAGED/Assembly-CSharp.dll" \
   -r:"$RIMWORLD_MANAGED/UnityEngine.CoreModule.dll" \
   -r:"$RIMWORLD_MANAGED/UnityEngine.IMGUIModule.dll" \
   -r:"$RIMWORLD_MANAGED/UnityEngine.TextRenderingModule.dll" \
   -r:"$HARMONY_DLL" \
-  $(find Source/LoadSupport -name '*.cs' ! -path '*/obj/*' ! -path '*/bin/*')
-echo "Built 1.6/Assemblies/LoadSupport.dll"
+  $(find Source/Parametric -name '*.cs' ! -path '*/obj/*' ! -path '*/bin/*')
+rm -f 1.6/Assemblies/LoadSupport.dll  # obsolete pre-rename assembly must never load alongside
+echo "Built 1.6/Assemblies/Parametric.dll"

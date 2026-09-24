@@ -4,7 +4,7 @@ using HarmonyLib;
 using RimWorld;
 using Verse;
 
-namespace LoadSupport
+namespace Parametric.LoadSupport
 {
     /// <summary>
     /// PATCH 1 — MassUtility.Capacity(Pawn, StringBuilder)   [Postfix]
@@ -15,6 +15,7 @@ namespace LoadSupport
     /// method once per pawn; on-map encumbrance (MassUtility.IsOverEncumbered/FreeSpace) calls it too.
     /// A single multiplicative postfix therefore covers caravans with no second subsystem, and it composes with
     /// any other mod's postfix/prefix on the same method (we multiply whatever result we are handed).
+    /// MassUtility.Capacity has NO Manipulation factor, so no ManipulationCompensation is applied here.
     /// </summary>
     [HarmonyPatch(typeof(MassUtility), nameof(MassUtility.Capacity))]
     [HarmonyPatch(new Type[] { typeof(Pawn), typeof(StringBuilder) })]
@@ -25,8 +26,8 @@ namespace LoadSupport
         {
             if (StatPart_LoadSupport.Bypass) return;
             if (!(__result > 0f)) return; // cannot carry at all (babies, non-pack animals...): leave untouched
-            LoadSupportSettings s = LoadSupportMod.Settings;
-            if (s == null || !s.applyToMassCapacity || !s.AppliesTo(p)) return;
+            ParametricSettings s = ParametricMod.Settings;
+            if (s == null || !s.applyToMassCapacity || !s.LoadSupportAppliesTo(p)) return;
 
             float factor = LoadSupportCache.Get(p);
             if (!(factor > 0f) || float.IsInfinity(factor) || Math.Abs(factor - 1f) < 0.0001f) return;
@@ -71,9 +72,9 @@ namespace LoadSupport
     {
         public static void Postfix(Pawn __instance, ref string __result)
         {
-            LoadSupportSettings s = LoadSupportMod.Settings;
+            ParametricSettings s = ParametricMod.Settings;
             if (s == null || !s.showInInspectPane) return;
-            if (__instance == null || !s.AppliesTo(__instance) || __instance.Dead) return;
+            if (__instance == null || !s.LoadSupportAppliesTo(__instance) || __instance.Dead) return;
 
             try
             {
@@ -84,7 +85,7 @@ namespace LoadSupport
             }
             catch (Exception ex)
             {
-                Log.ErrorOnce("[LoadSupport] Inspect string failed: " + ex, 0x4C530001);
+                Log.ErrorOnce(LoadSupportLog.Prefix + "Inspect string failed: " + ex, 0x50524D01);
             }
         }
     }

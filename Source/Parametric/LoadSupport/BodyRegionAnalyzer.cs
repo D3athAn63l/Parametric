@@ -3,23 +3,27 @@ using System.Collections.Generic;
 using RimWorld;
 using Verse;
 
-namespace LoadSupport
+namespace Parametric.LoadSupport
 {
     /// <summary>
     /// Reads a pawn's CURRENT body and hediffs and reduces them to three region efficiencies.
     ///
-    /// Everything here goes through RimWorld's own generic body APIs — the same ones the vanilla
-    /// Moving / Manipulation capacity workers use — so prosthetics, bionics, archotech parts and modded
-    /// replacement parts are understood automatically, as long as they use standard mechanisms:
+    /// Everything here goes through RimWorld's own generic body APIs (the same ones the vanilla
+    /// Moving / Manipulation capacity workers use), so prosthetics, bionics, archotech parts and modded
+    /// replacement parts are understood automatically when they use standard mechanisms:
     ///   • Hediff_AddedPart + addedPartProps.partEfficiency   (all vanilla/most modded prosthetics)
     ///   • HediffStage.partEfficiencyOffset                  (part-level buffs/debuffs)
     ///   • missing parts / missing parents / part HP         (injuries, amputations)
-    ///   • HediffStage capMods on Moving / Manipulation       (non-part body modifiers, dampened)
+    ///   • capMods on Moving from hediffs AND active genes   (non-part lower-body modifiers, dampened)
     ///
     /// Region mapping uses BodyPartTagDefs, never DefNames:
     ///   Lower  = MovingLimbCore / MovingLimbSegment / MovingLimbDigit   (legs, feet, toes or equivalents)
     ///   Upper  = ManipulationLimbCore / ...Segment / ...Digit            (shoulders, arms, hands or equivalents)
     ///   Core   = parts tagged Spine, parts tagged Pelvis, and the body's root (corePart, e.g. torso)
+    ///
+    /// The UPPER region is deliberately limb-only (no capMods). Everything else that feeds vanilla's Manipulation
+    /// capacity (consciousness, capMods, genes, custom workers) is kept by vanilla's own Manipulation factor on
+    /// CarryingCapacity — see <see cref="ManipulationCompensation"/>. Reading it here too would count it twice.
     /// </summary>
     public static class BodyRegionAnalyzer
     {
@@ -34,9 +38,9 @@ namespace LoadSupport
         private const float CoreWeightRoot = 0.2f;
 
         /// <summary>
-        /// How strongly whole-pawn capacity modifiers (capMods) feed into region efficiency.
+        /// How strongly Moving capMods feed into lower-body efficiency.
         /// 0.5 = square root: a +100% Moving capMod gives ×1.41 lower-body efficiency, not ×2.
-        /// Movement is related to, but not the same as, load-bearing (design requirement).
+        /// Movement is related to, but not the same as, load-bearing.
         /// </summary>
         private const float CapModInfluence = 0.5f;
 
@@ -44,14 +48,14 @@ namespace LoadSupport
         {
             public bool HasLower, HasCore, HasUpper;
             public float LowerPartEfficiency, CorePartEfficiency, UpperPartEfficiency;
-            public float LowerCapModFactor, UpperCapModFactor;
+            public float LowerCapModFactor;
             public float LowerEfficiency, CoreEfficiency, UpperEfficiency;
         }
 
         public static Reading Read(Pawn pawn)
         {
             var r = new Reading();
-            r.LowerCapModFactor = r.UpperCapModFactor = 1f;
+            r.LowerCapModFactor = 1f;
 
             BodyDef body = pawn.RaceProps != null ? pawn.RaceProps.body : null;
             HediffSet set = pawn.health != null ? pawn.health.hediffSet : null;
@@ -71,7 +75,7 @@ namespace LoadSupport
                     BodyPartTagDefOf.MovingLimbDigit, LowerAppendageWeight, out functional, null);
             }
 
-            // ---------- Upper body ----------
+            // ---------- Upper body (limb-only, exactly the limb term of vanilla's Manipulation worker) ----------
             if (HasAny(body, BodyPartTagDefOf.ManipulationLimbCore))
             {
                 r.HasUpper = true;
@@ -103,12 +107,12 @@ namespace LoadSupport
                 r.CorePartEfficiency = coreSum / coreW;
             }
 
-            // ---------- Whole-pawn capacity modifiers (hediff capMods) ----------
-            float lowerMax, upperMax;
-            ReadCapMods(pawn, set, out r.LowerCapModFactor, out lowerMax, out r.UpperCapModFactor, out upperMax);
+            // ---------- Moving capMods (hediffs + active genes), dampened ----------
+            float lowerMax;
+            ReadMovingCapMods(pawn, set, out r.LowerCapModFactor, out lowerMax);
 
             r.LowerEfficiency = Math.Min(r.LowerPartEfficiency * r.LowerCapModFactor, lowerMax);
-            r.UpperEfficiency = Math.Min(r.UpperPartEfficiency * r.UpperCapModFactor, upperMax);
+            r.UpperEfficiency = r.UpperPartEfficiency;
             r.CoreEfficiency = r.CorePartEfficiency;
             return r;
         }
@@ -135,51 +139,62 @@ namespace LoadSupport
         }
 
         /// <summary>
-        /// Aggregates hediff capMods for Moving (→ lower) and Manipulation (→ upper) the same way vanilla does
-        /// (sum offsets, multiply postFactors, min of setMax) and returns a dampened multiplier.
+        /// Aggregates capMods on Moving the same way vanilla PawnCapacityUtility.CalculateCapacityLevel does:
+        /// hediffs (offset sum, postFactor product scaled by capacityFactorEffectMultiplier, min of defined setMax), then
+        /// active Biotech genes (offset, postFactor, setMax). Returns a dampened multiplier and the setMax ceiling.
         /// </summary>
-        private static void ReadCapMods(Pawn pawn, HediffSet set,
-            out float lowerFactor, out float lowerMax, out float upperFactor, out float upperMax)
+        private static void ReadMovingCapMods(Pawn pawn, HediffSet set, out float factor, out float max)
         {
-            float lowOff = 0f, lowPost = 1f, upOff = 0f, upPost = 1f;
-            lowerMax = upperMax = float.MaxValue;
-
+            float off = 0f, post = 1f;
+            max = float.MaxValue;
             PawnCapacityDef moving = PawnCapacityDefOf.Moving;
-            PawnCapacityDef manip = PawnCapacityDefOf.Manipulation;
-            List<Hediff> hediffs = set.hediffs;
+            if (moving == null) { factor = 1f; return; }
 
+            List<Hediff> hediffs = set.hediffs;
             for (int i = 0; i < hediffs.Count; i++)
             {
                 Hediff h = hediffs[i];
                 if (h == null) continue;
                 List<PawnCapacityModifier> mods;
-                try { mods = h.CapMods; }
+                HediffStage stage;
+                try { mods = h.CapMods; stage = h.CurStage; }
                 catch { continue; } // malformed modded hediff: ignore it rather than break the pawn
                 if (mods == null) continue;
 
                 for (int j = 0; j < mods.Count; j++)
                 {
                     PawnCapacityModifier m = mods[j];
-                    if (m == null) continue;
-                    if (m.capacity == moving)
+                    if (m == null || m.capacity != moving) continue;
+                    off += m.offset;
+                    float pf = m.postFactor;
+                    if (stage != null && stage.capacityFactorEffectMultiplier != null)
+                        pf = StatWorker.ScaleFactor(pf, pawn.GetStatValue(stage.capacityFactorEffectMultiplier, true, -1));
+                    post *= pf;
+                    if (m.SetMaxDefined) max = Math.Min(max, m.EvaluateSetMax(pawn)); // undefined setMax = 999 in vanilla: not a real ceiling
+                }
+            }
+
+            if (pawn.genes != null && ModsConfig.BiotechActive)
+            {
+                List<Gene> genes = pawn.genes.GenesListForReading;
+                for (int i = 0; i < genes.Count; i++)
+                {
+                    Gene g = genes[i];
+                    if (g == null || !g.Active || g.def == null || g.def.capMods == null) continue;
+                    List<PawnCapacityModifier> mods = g.def.capMods;
+                    for (int j = 0; j < mods.Count; j++)
                     {
-                        lowOff += m.offset;
-                        lowPost *= m.postFactor;
-                        if (m.SetMaxDefined) lowerMax = Math.Min(lowerMax, m.EvaluateSetMax(pawn));
-                    }
-                    else if (m.capacity == manip)
-                    {
-                        upOff += m.offset;
-                        upPost *= m.postFactor;
-                        if (m.SetMaxDefined) upperMax = Math.Min(upperMax, m.EvaluateSetMax(pawn));
+                        PawnCapacityModifier m = mods[j];
+                        if (m == null || m.capacity != moving) continue;
+                        off += m.offset;
+                        post *= m.postFactor;
+                        if (m.SetMaxDefined) max = Math.Min(max, m.EvaluateSetMax(pawn)); // undefined setMax = 999 in vanilla: not a real ceiling
                     }
                 }
             }
 
-            lowerFactor = Dampen((1f + lowOff) * lowPost);
-            upperFactor = Dampen((1f + upOff) * upPost);
-            if (float.IsNaN(lowerMax) || lowerMax < 0f) lowerMax = 0f;
-            if (float.IsNaN(upperMax) || upperMax < 0f) upperMax = 0f;
+            factor = Dampen((1f + off) * post);
+            if (float.IsNaN(max) || max < 0f) max = 0f;
         }
 
         private static float Dampen(float rawMultiplier)

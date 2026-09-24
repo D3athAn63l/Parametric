@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ModMetaData>
-  <!-- Temporary name. To rename: change <name>, <packageId>, LoadSupport_ModName in Languages/, and HarmonyId in LoadSupportMod.cs. -->
-  <name>Load Support</name>
+  <name>Parametric</name>
   <author>aRed</author>
-  <packageId>aRed.LoadSupport</packageId>
-  <modVersion>0.1.0</modVersion>
+  <packageId>aRed.Parametric</packageId>
+  <modVersion>0.1.1</modVersion>
+  <url>https://github.com/D3athAn63l/Parametric</url>
   <supportedVersions>
     <li>1.6</li>
   </supportedVersions>
@@ -19,15 +19,17 @@
   <loadAfter>
     <li>brrainz.harmony</li>
   </loadAfter>
-  <description>Carrying capacity that follows the body.
+  <description>Parametric is a lightweight background systems mod. Its first module, Load Support, derives each pawn's carrying capability from its actual body.
 
-Each pawn gets a LoadSupport multiplier (healthy = x1.00), worked out from the current state of its legs, core (spine, pelvis, torso) and arms. Missing limbs lower it; prosthetics, bionics, archotech parts and modded replacement parts raise it.
+Load Support
+Each pawn gets a Load Support multiplier (healthy = x1.00) worked out from the current state of its legs, core (spine, pelvis, torso) and arms. Missing limbs lower it; prosthetics, bionics, archotech parts and modded replacement parts raise it.
 
 - Works with modded bionics and races without compatibility patches. It reads RimWorld's own part-efficiency system, not DefNames.
 - Superhuman parts scale nonlinearly (efficiency^2.5 by default).
 - There is a structural bottleneck: super-legs on a normal spine help, but the spine limits them.
-- Multiplies the existing carrying capacity (genes, traits, body size and other mods are kept). Optionally also applies to inventory and caravan mass.
+- Multiplies the existing carrying capacity, so genes, traits, body size and other mods are kept. Vanilla's Manipulation factor is corrected so arms aren't counted twice.
+- Optionally also applies to inventory and caravan mass.
 - Nothing is written to your save. Safe to add or remove mid-game.
 
-Requires Harmony. v0.1: the core system only.</description>
+Requires Harmony.</description>
 </ModMetaData>

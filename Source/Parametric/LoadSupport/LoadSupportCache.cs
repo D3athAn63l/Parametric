@@ -2,7 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using Verse;
 
-namespace LoadSupport
+namespace Parametric.LoadSupport
 {
     /// <summary>
     /// Ephemeral, per-session cache of LoadSupport results.
@@ -14,16 +14,21 @@ namespace LoadSupport
     ///  • Invalidation:
     ///      1. Event: HediffSet.DirtyCache() (fires on hediff add/remove/change, part loss, prosthetic install,
     ///         restoration...) marks the entry dirty. See HarmonyPatches.
-    ///      2. Time: an entry older than RefreshIntervalTicks is recomputed on next request. This is the safety
-    ///         net for anything the event misses (gradual healing, severity drift, modded mechanics).
+    ///         In 1.6 DirtyCache is called from AddDirect, RemoveHediff, Notify_HediffChanged (injury healing,
+    ///         stage/severity changes), RestorePart, Notify_Resurrected, Notify_GenesChanged, Kill and load.
+    ///      2. Time: an entry older than RefreshIntervalTicks is recomputed on next request. This is only the safety
+    ///         net for what the event misses (stat-driven setMax curves / capacityFactorEffectMultiplier, exotic mods).
     ///      3. Settings change / explicit clear: a global generation counter.
     ///  • Lookups are allocation-free; recomputation runs at most once per pawn per interval, and only when
     ///    something actually asks for the value (no ticking).
     /// </summary>
     public static class LoadSupportCache
     {
-        /// <summary>250 ticks ≈ 4 s at 1× speed.</summary>
-        public const int RefreshIntervalTicks = 250;
+        /// <summary>
+        /// Safety-net expiry: 1000 ticks ≈ 16.7 s at 1× speed. Raised from 250 in 0.1.1 because the DirtyCache event
+        /// covers every standard body change (see above); the timer only catches non-evented drift.
+        /// </summary>
+        public const int RefreshIntervalTicks = 1000;
 
         private sealed class Entry
         {
@@ -73,11 +78,11 @@ namespace LoadSupport
 
             // Auto-logging is limited to the player's own pawns to keep the log readable on big maps;
             // the dev-mode debug actions cover everyone else.
-            if (LoadSupportMod.Settings != null && LoadSupportMod.Settings.debugLogging
+            if (ParametricMod.Settings != null && ParametricMod.Settings.debugLogging
                 && pawn.Faction != null && pawn.Faction.IsPlayer)
             {
                 if (!hadPrevious || Math.Abs(previous.LoadSupport - fresh.LoadSupport) > 0.005f)
-                    LoadSupportDebug.LogChange(pawn, hadPrevious ? previous.LoadSupport : (float?)null, fresh);
+                    Parametric.Debug.ParametricDebug.LogChange(pawn, hadPrevious ? previous.LoadSupport : (float?)null, fresh);
             }
             return fresh;
         }

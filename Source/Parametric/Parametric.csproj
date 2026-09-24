@@ -2,10 +2,10 @@
 
   <!--
     Build:  dotnet build -c Release          (from this folder)
-    Output: ../../1.6/Assemblies/LoadSupport.dll
+    Output: ../../1.6/Assemblies/Parametric.dll
 
     References are resolved in this order:
-      RimWorld : -p:RimWorldManaged=<.../RimWorldWin64_Data/Managed>  (default: assumes this mod lives in RimWorld/Mods/LoadSupport)
+      RimWorld : -p:RimWorldManaged=<.../RimWorldWin64_Data/Managed>  (default: assumes this mod lives in RimWorld/Mods/Parametric)
                  otherwise the Krafs.Rimworld.Ref NuGet package (reference assemblies, nothing shipped)
                  (if that folder has no netstandard.dll, pass -p:NetStandardDll=<a netstandard 2.1 facade>)
     Harmony  : -p:HarmonyDll=<path to 0Harmony.dll>
@@ -16,9 +16,9 @@
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>LoadSupport</AssemblyName>
-    <RootNamespace>LoadSupport</RootNamespace>
-    <Version>0.1.0</Version>
+    <AssemblyName>Parametric</AssemblyName>
+    <RootNamespace>Parametric</RootNamespace>
+    <Version>0.1.1</Version>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\1.6\Assemblies\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
@@ -62,5 +62,10 @@
   <ItemGroup Condition="'$(FrameworkPathOverride)' == ''">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
+
+  <!-- The pre-rename assembly must never load next to Parametric.dll. -->
+  <Target Name="RemoveObsoleteAssemblies" AfterTargets="Build">
+    <Delete Files="$(OutputPath)LoadSupport.dll" />
+  </Target>
 
 </Project>
