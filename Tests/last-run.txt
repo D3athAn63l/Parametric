@@ -1,0 +1,181 @@
+### Formula tests
+=== Strength curve (k = 2.5) ===
+  efficiency    0% -> strength 0.00
+  efficiency   25% -> strength 0.25
+  efficiency   50% -> strength 0.50
+  efficiency   85% -> strength 0.85
+  efficiency  100% -> strength 1.00
+  efficiency  125% -> strength 1.75
+  efficiency  150% -> strength 2.76
+  efficiency  200% -> strength 5.66
+  efficiency  300% -> strength 15.59
+  efficiency  500% -> strength 55.90
+  efficiency 1000% -> strength 316.23
+  ok:   125% ? 1.75
+  ok:   150% ? 2.76
+  ok:   200% ? 5.66
+  ok:   300% ? 15.59
+  ok:   500% ? 55.9
+  ok:   continuous at 100%
+
+=== Scenarios (weights L .50 / C .35 / U .15, k = 2.5) ===
+01 healthy human                               L   1.00->   1.00  C   1.00->   1.00  U   1.00->   1.00 (eff  1.00) | naive    1.00 bneck  1.00 | LS   1.000 | carry    75.0 kg  mass   35.0 kg
+02 missing one leg                             L   0.50->   0.50  C   1.00->   1.00  U   1.00->   1.00 (eff  0.77) | naive    0.75 bneck  0.87 | LS   0.651 | carry    48.8 kg  mass   22.8 kg
+03 missing both legs                           L   0.00->   0.00  C   1.00->   1.00  U   1.00->   1.00 (eff  0.00) | naive    0.50 bneck  0.10 | LS   0.050 | carry     3.8 kg  mass    1.8 kg
+03b missing both legs and both arms            L   0.00->   0.00  C   1.00->   1.00  U   0.00->   0.00 (eff  0.00) | naive    0.35 bneck  0.14 | LS   0.050 | carry     3.8 kg  mass    1.8 kg
+04 one simple prosthetic leg (0.85)            L   0.93->   0.93  C   1.00->   1.00  U   1.00->   1.00 (eff  0.98) | naive    0.96 bneck  1.00 | LS   0.958 | carry    71.8 kg  mass   33.5 kg
+04b one peg leg (0.6)                          L   0.80->   0.80  C   1.00->   1.00  U   1.00->   1.00 (eff  0.93) | naive    0.90 bneck  0.98 | LS   0.881 | carry    66.1 kg  mass   30.8 kg
+05 one bionic leg                              L   1.13->   1.34  C   1.00->   1.00  U   1.00->   1.00 (eff  1.08) | naive    1.17 bneck  0.99 | LS   1.162 | carry    87.2 kg  mass   40.7 kg
+06 two bionic legs                             L   1.25->   1.75  C   1.00->   1.00  U   1.00->   1.00 (eff  1.14) | naive    1.37 bneck  0.95 | LS   1.307 | carry    98.0 kg  mass   45.8 kg
+07 full vanilla bionics (legs,arms,spine)      L   1.25->   1.75  C   1.10->   1.27  U   1.25->   1.75 (eff  1.62) | naive    1.58 bneck  0.97 | LS   1.529 | carry   114.7 kg  mass   53.5 kg
+08 archotech legs+arms, bionic spine           L   1.50->   2.76  C   1.10->   1.27  U   1.50->   2.76 (eff  2.22) | naive    2.24 bneck  0.86 | LS   1.913 | carry   143.5 kg  mass   67.0 kg
+09 modded legs 300%, rest normal               L   3.00->  15.59  C   1.00->   1.00  U   1.00->   1.00 (eff  1.38) | naive    8.29 bneck  0.25 | LS   2.098 | carry   157.3 kg  mass   73.4 kg
+10 modded legs 500%, rest normal               L   5.00->  55.90  C   1.00->   1.00  U   1.00->   1.00 (eff  1.41) | naive   28.45 bneck  0.08 | LS   2.224 | carry   166.8 kg  mass   77.8 kg
+10b modded legs 1000%, rest normal             L  10.00-> 316.23  C   1.00->   1.00  U   1.00->   1.00 (eff  1.41) | naive  158.61 bneck  0.01 | LS   2.267 | carry   170.0 kg  mass   79.4 kg
+11 legs 300% + spine&pelvis 300%               L   3.00->  15.59  C   2.60->  10.90  U   1.00->   1.00 (eff  1.86) | naive   11.76 bneck  0.98 | LS  11.536 | carry   865.2 kg  mass  403.7 kg
+11b legs 300% + core 300% (all)                L   3.00->  15.59  C   3.00->  15.59  U   1.00->   1.00 (eff  1.88) | naive   13.40 bneck  1.01 | LS  13.532 | carry  1014.9 kg  mass  473.6 kg
+11c full body 300%                             L   3.00->  15.59  C   3.00->  15.59  U   3.00->  15.59 (eff 15.59) | naive   15.59 bneck  1.00 | LS  15.588 | carry  1169.1 kg  mass  545.6 kg
+11d legs 500% + core 500%                      L   5.00->  55.90  C   5.00->  55.90  U   1.00->   1.00 (eff  1.96) | naive   47.67 bneck  1.00 | LS  47.811 | carry  3585.8 kg  mass 1673.4 kg
+11e full body 500%                             L   5.00->  55.90  C   5.00->  55.90  U   5.00->  55.90 (eff 55.90) | naive   55.90 bneck  1.00 | LS  55.902 | carry  4192.6 kg  mass 1956.6 kg
+12 injured: leg 44% eff, torso 70%             L   0.72->   0.72  C   0.94->   0.94  U   1.00->   1.00 (eff  0.89) | naive    0.84 bneck  0.97 | LS   0.812 | carry    60.9 kg  mass   28.4 kg
+13 bad spine (30%), legs fine                  L   1.00->   1.00  C   0.72->   0.72  U   1.00->   1.00 (eff  0.93) | naive    0.90 bneck  0.97 | LS   0.872 | carry    65.4 kg  mass   30.5 kg
+14 powerful legs 300% + weak spine 50%         L   3.00->  15.59  C   0.80->   0.80  U   1.00->   1.00 (eff  1.29) | naive    8.22 bneck  0.21 | LS   1.732 | carry   129.9 kg  mass   60.6 kg
+15 missing one arm                             L   1.00->   1.00  C   1.00->   1.00  U   0.50->   0.50 (eff  0.67) | naive    0.93 bneck  1.03 | LS   0.950 | carry    71.3 kg  mass   33.3 kg
+16 super arms 300% only                        L   1.00->   1.00  C   1.00->   1.00  U   3.00->  15.59 (eff  1.88) | naive    3.19 bneck  0.36 | LS   1.132 | carry    84.9 kg  mass   39.6 kg
+16b super core 300% only                       L   1.00->   1.00  C   3.00->  15.59  U   1.00->   1.00 (eff  1.24) | naive    6.11 bneck  0.26 | LS   1.569 | carry   117.7 kg  mass   54.9 kg
+17 animal healthy (no upper)                   L   1.00->   1.00  C   1.00->   1.00  U   1.00->   1.00 (eff  0.00) | naive    1.00 bneck  1.00 | LS   1.000 | carry    75.0 kg  mass   35.0 kg
+18 animal missing 1 of 4 legs                  L   0.75->   0.75  C   1.00->   1.00  U   1.00->   1.00 (eff  0.00) | naive    0.85 bneck  0.98 | LS   0.836 | carry    62.7 kg  mass   29.3 kg
+19 legless mech (core only)                    L   1.00->   1.00  C   1.00->   1.00  U   1.00->   1.00 (eff  0.00) | naive    1.00 bneck  1.00 | LS   1.000 | carry    75.0 kg  mass   35.0 kg
+20 no recognised anatomy                       L   1.00->   1.00  C   1.00->   1.00  U   1.00->   1.00 (eff  1.00) | naive    1.00 bneck  1.00 | LS   1.000 | carry    75.0 kg  mass   35.0 kg
+21 garbage inputs (NaN,-5,+inf)                L   1.00->   1.00  C   0.00->   0.00  U   1.00->   1.00 (eff  0.00) | naive    0.65 bneck  0.08 | LS   0.050 | carry     3.8 kg  mass    1.8 kg
+21b one NaN region, rest healthy               L   1.00->   1.00  C   1.00->   1.00  U   1.00->   1.00 (eff  1.00) | naive    1.00 bneck  1.00 | LS   1.000 | carry    75.0 kg  mass   35.0 kg
+22 legs 300%, exponent 1.0 (linear)            L   3.00->   3.00  C   1.00->   1.00  U   1.00->   1.00 (eff  1.24) | naive    2.00 bneck  0.79 | LS   1.585 | carry   118.9 kg  mass   55.5 kg
+23 full body 300%, exponent 1.0                L   3.00->   3.00  C   3.00->   3.00  U   3.00->   3.00 (eff  3.00) | naive    3.00 bneck  1.00 | LS   3.000 | carry   225.0 kg  mass  105.0 kg
+24 full body 300%, exponent 4.0                L   3.00->  81.00  C   3.00->  81.00  U   3.00->  81.00 (eff 81.00) | naive   81.00 bneck  1.00 | LS  81.000 | carry  6075.0 kg  mass 2835.0 kg
+
+=== Assertions ===
+  ok:   healthy = exactly 1.0
+  ok:   healthy animal = exactly 1.0
+  ok:   healthy legless mech = exactly 1.0
+  ok:   one leg missing: 0.55..0.85
+  ok:   super arms only: small gain, far below super legs only
+  ok:   super core only: bottlenecked like legs-only
+  ok:   NaN/inf region -> neutral 1.0 for that region, flagged
+  ok:   both legs missing: valid, heavily reduced (<0.25)
+  ok:   everything missing: floor, not zero
+  ok:   peg < prosthetic < healthy < 1 bionic < 2 bionic
+  ok:   full vanilla bionics > two bionic legs
+  ok:   archotech > full bionics
+  ok:   legs-only 300% improves substantially (> 1.8x)
+  ok:   bottleneck visibly matters: legs-only < 30% of naive weighted
+  ok:   legs+core >> legs-only (> 4x)
+  ok:   full body gets full scaling (= 300%^2.5)
+  ok:   normal core caps legs: 1000% legs < 2.6x
+  ok:   monotonic in legs: 300% < 500% < 1000%
+  ok:   weak spine limits strong legs below legs+normal-core
+  ok:   garbage inputs produce finite positive value
+  ok:   no anatomy -> neutral 1.0
+  ok:   exponent 1.0 makes full body linear (3.0)
+  ok:   uniform sweep 0..1000% finite
+  ok:   uniform sweep monotonic
+  ok:   no discontinuity around 100% (max step < 0.05)
+  ok:   200k random inputs (incl. negative, absent regions, bad exponents) always valid
+  info: formula cost 0.141 ?s/call (sink 1179415)
+
+ALL FORMULA TESTS PASSED
+
+### Integration tests
+=== Harmony: applying mod patches to real 1.6 methods ===
+  patched: RimWorld.MassUtility.Capacity(Pawn, StringBuilder)
+  patched: Verse.HediffSet.DirtyCache()
+  patched: Verse.Pawn.GetInspectString()
+  ok:   exactly 3 methods patched
+  ok:   MassUtility.Capacity(Pawn, StringBuilder) patched
+  ok:   HediffSet.DirtyCache() patched
+  ok:   Pawn.GetInspectString() patched
+
+=== StatPart injection ===
+  ok:   part list created, exactly one LoadSupport part
+  ok:   parentStat set, runs last (priority)
+  ok:   immutable flag cleared so the StatWorker does not cache forever
+
+=== Body scenarios (real vanilla PawnCapacityUtility on synthetic bodies) ===
+01 healthy human                             L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
+02 missing one leg                           L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  stat75->  48.8  mass  22.8
+03 missing both legs                         L  0.00->  0.00  C  1.00->  1.00  U  1.00->  1.00  bneck 0.10  LS  0.050  stat75->   3.8  mass   1.8
+04a peg leg (0.6)                            L  0.80->  0.80  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.881  stat75->  66.1  mass  30.8
+04b simple prosthetic leg (0.85)             L  0.93->  0.93  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  0.958  stat75->  71.8  mass  33.5
+05 one bionic leg                            L  1.13->  1.34  C  1.00->  1.00  U  1.00->  1.00  bneck 0.99  LS  1.162  stat75->  87.2  mass  40.7
+06 two bionic legs                           L  1.25->  1.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.95  LS  1.307  stat75->  98.0  mass  45.8
+07 full vanilla bionics                      L  1.25->  1.75  C  1.10->  1.27  U  1.25->  1.75  bneck 0.97  LS  1.529  stat75-> 114.7  mass  53.5
+08 archotech legs+arms, bionic spine         L  1.50->  2.76  C  1.10->  1.27  U  1.50->  2.76  bneck 0.86  LS  1.913  stat75-> 143.5  mass  67.0
+09/10 modded 300% legs, normal core          L  3.00-> 15.59  C  1.00->  1.00  U  1.00->  1.00  bneck 0.25  LS  2.098  stat75-> 157.3  mass  73.4
+11 modded 300% legs + spine + pelvis         L  3.00-> 15.59  C  2.60-> 10.90  U  1.00->  1.00  bneck 0.98  LS 11.536  stat75-> 865.2  mass 403.7
+11b modded 300% everything (torso organic)   L  3.00-> 15.59  C  2.60-> 10.90  U  3.00-> 15.59  bneck 0.96  LS 13.405  stat75->1005.3  mass 469.2
+12 leg at 50% HP, torso at 70% HP            L  0.72->  0.72  C  0.94->  0.94  U  1.00->  1.00  bneck 0.97  LS  0.812  stat75->  60.9  mass  28.4
+12b missing one foot                         L  0.50->  0.50  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  0.651  stat75->  48.8  mass  22.8
+13 whole-body capMod Moving +100%            L  1.41->  2.38  C  1.00->  1.00  U  1.00->  1.00  bneck 0.87  LS  1.470  stat75-> 110.3  mass  51.5
+13b capMods Moving/Manip -30%                L  0.84->  0.84  C  1.00->  1.00  U  0.84->  0.84  bneck 1.00  LS  0.892  stat75->  66.9  mass  31.2
+13c partEfficiencyOffset +0.5 on spine       L  1.00->  1.00  C  1.20->  1.58  U  1.00->  1.00  bneck 0.97  LS  1.163  stat75->  87.2  mass  40.7
+14 healthy pack animal (no arms)             L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
+14b pack animal missing one leg              L  0.75->  0.75  C  1.00->  1.00  U  1.00->  1.00  bneck 0.98  LS  0.836  stat75->  62.7  mass  29.3
+15 no recognised anatomy (1 untagged part)   L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
+15b manipulators only, no legs/spine         L  1.00->  1.00  C  1.00->  1.00  U  1.00->  1.00  bneck 1.00  LS  1.000  stat75->  75.0  mass  35.0
+15c manipulators only, one lost              L  1.00->  1.00  C  1.00->  1.00  U  0.67->  0.67  bneck 1.04  LS  0.940  stat75->  70.5  mass  32.9
+
+=== Assertions ===
+  ok:   healthy human = 1.000
+  ok:   healthy pack animal = 1.000
+  ok:   strange anatomy (blob) = 1.000, no exceptions
+  ok:   tentacle anatomy healthy = 1.000
+  ok:   vanilla limb math: one leg missing -> lower efficiency 0.5
+  ok:   vanilla limb math: bionic leg -> 1.125 avg (children under added part count as 1.0)
+  ok:   vanilla limb math: two bionic legs -> 1.25
+  ok:   missing both legs: valid, heavily reduced
+  ok:   peg < prosthetic < healthy < bionic1 < bionic2 < full bionic < archotech
+  ok:   bottleneck: modded legs on normal core < 2.5
+  ok:   legs + core much higher than legs alone (> 4x)
+  ok:   everything enhanced > legs + core
+  ok:   injuries reduce
+  ok:   missing foot disables that limb exactly like vanilla Moving does (limb = leg x foot)
+  ok:   capMod +100% Moving: dampened (lower eff ~1.41, not 2.0)
+  ok:   negative capMods reduce
+  ok:   partEfficiencyOffset on spine raises core
+  ok:   animal missing a leg: reduced
+  ok:   tentacle anatomy with lost limb: reduced but valid
+
+=== MassUtility.Capacity (caravan / inventory) through the real patched method ===
+  two bionic legs: vanilla 35.00 kg -> modded 45.75 kg
+  ok:   vanilla MassUtility base is 35 kg for body size 1
+  ok:   postfix multiplies by LoadSupport
+  ok:   master switch off -> vanilla 35 kg
+  ok:   master switch off -> stat untouched
+  ok:   non-humanlike toggle off -> animal untouched
+  ok:   non-humanlike toggle on -> animal reduced
+  ok:   debug bypass returns vanilla value
+
+=== Cache: time expiry, dirty marking, generation ===
+  ok:   within interval and not dirty -> cached value reused
+  ok:   after 250 ticks -> recomputed (picks up bionic legs)
+  ok:   MarkDirty -> immediate recompute (arm removed)
+
+  skip: vanilla DirtyCache needs more game state outside Unity (TypeInitializationException); postfix binding verified above
+  ok:   tick going backwards -> recompute
+  exponent 1.0: cached 1.000 -> after invalidate 1.123
+  ok:   InvalidateAll (settings change) -> recompute
+  info: 100k cached lookups allocated ~0 bytes (sink 112326)
+  ok:   cached lookups allocate (almost) nothing
+  info: full body evaluation 14.05 ?s/pawn (Mono JIT, outside Unity)
+
+=== Log output captured during tests ===
+  Tried to use an uninitialized DefOf of type BodyPartTagDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
+  Tried to use an uninitialized DefOf of type PawnCapacityDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
+  Used UnityData before it's initialized.
+  Tried to get a resource "UI/Icons/LifeStage/VeryYoung" from a different thread. All resources must be loaded in the main thread.
+  Tried to get a resource "UI/Icons/LifeStage/Young" from a different thread. All resources must be loaded in the main thread.
+  Tried to get a resource "UI/Icons/LifeStage/Adult" from a different thread. All resources must be loaded in the main thread.
+  Tried to get a resource "Things/Pawn/Effects/Unhappy" from a different thread. All resources must be loaded in the main thread.
+  ok:   no errors logged
+
+ALL INTEGRATION TESTS PASSED
+

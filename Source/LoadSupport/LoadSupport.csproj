@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Build:  dotnet build -c Release          (from this folder)
+    Output: ../../1.6/Assemblies/LoadSupport.dll
+
+    References are resolved in this order:
+      RimWorld : -p:RimWorldManaged=<.../RimWorldWin64_Data/Managed>  (default: assumes this mod lives in RimWorld/Mods/LoadSupport)
+                 otherwise the Krafs.Rimworld.Ref NuGet package (reference assemblies, nothing shipped)
+                 (if that folder has no netstandard.dll, pass -p:NetStandardDll=<a netstandard 2.1 facade>)
+    Harmony  : -p:HarmonyDll=<path to 0Harmony.dll>
+                 otherwise the Lib.Harmony NuGet package with runtime assets excluded (the Harmony MOD provides it in-game)
+    0Harmony.dll must NOT be copied into this mod's Assemblies folder.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LoadSupport</AssemblyName>
+    <RootNamespace>LoadSupport</RootNamespace>
+    <Version>0.1.0</Version>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\1.6\Assemblies\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <RimWorldManaged Condition="'$(RimWorldManaged)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\RimWorldWin64_Data\Managed</RimWorldManaged>
+    <UseLocalRimWorld Condition="Exists('$(RimWorldManaged)\Assembly-CSharp.dll')">true</UseLocalRimWorld>
+    <UseLocalHarmony Condition="'$(HarmonyDll)' != '' And Exists('$(HarmonyDll)')">true</UseLocalHarmony>
+  </PropertyGroup>
+
+  <!-- RimWorld: local install -->
+  <ItemGroup Condition="'$(UseLocalRimWorld)' == 'true'">
+    <Reference Include="Assembly-CSharp"><HintPath>$(RimWorldManaged)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(RimWorldManaged)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(RimWorldManaged)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(RimWorldManaged)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(RimWorldManaged)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <!-- Unity 2022 assemblies reference netstandard 2.1; RimWorld ships it next to Assembly-CSharp. -->
+    <Reference Include="netstandard" Condition="Exists('$(RimWorldManaged)\netstandard.dll')"><HintPath>$(RimWorldManaged)\netstandard.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="netstandard" Condition="!Exists('$(RimWorldManaged)\netstandard.dll') And '$(NetStandardDll)' != ''"><HintPath>$(NetStandardDll)</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <!-- RimWorld: NuGet reference assemblies -->
+  <ItemGroup Condition="'$(UseLocalRimWorld)' != 'true'">
+    <PackageReference Include="Krafs.Rimworld.Ref" Version="1.6.*" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Harmony -->
+  <ItemGroup Condition="'$(UseLocalHarmony)' == 'true'">
+    <Reference Include="0Harmony"><HintPath>$(HarmonyDll)</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseLocalHarmony)' != 'true'">
+    <PackageReference Include="Lib.Harmony" Version="2.4.1" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- .NET Framework reference assemblies for non-Windows builds (skipped if FrameworkPathOverride is given, e.g. Mono's 4.7.2-api) -->
+  <ItemGroup Condition="'$(FrameworkPathOverride)' == ''">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
