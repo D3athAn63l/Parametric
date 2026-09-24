@@ -200,7 +200,29 @@ Superhuman series: 100% 75.0 · 125% 78.1 · 150% 80.3 · 300% 84.9 · 500% 85.9
 
 ## 8. Inventory / caravan mass path
 
-`MassUtility.Capacity(Pawn, StringBuilder)` = `BodySize × 35` (0 if the pawn can never carry). One **postfix** multiplies the result by Load Support (setting, default on). Every caravan, transport pod, shuttle and gift check goes through `CollectionsMassCalculator.Capacity`, which calls this method per pawn, so there is no second subsystem. The caravan mass tab shows `(load support x1.36 = 47.7 kg)` on each pawn's line. A formed caravan caches its total and refreshes it on vanilla's own dirty events.
+`MassUtility.Capacity(Pawn, StringBuilder)` = `BodySize × 35` (0 if the pawn can never carry). Vanilla 1.6 has **no mass-capacity StatDef**, so an info-card "mass carry capacity" row comes from another mod. Parametric multiplies the result by Load Support (setting, default on). It uses a **postfix** at `Priority.Last`, with a tiny prefix (`Priority.First`) and finalizer for the re-entrancy guard below.
+
+Every vanilla consumer calls the method **exactly once per pawn** (verified in the 1.6 assembly), so there is no second subsystem:
+
+- `CollectionsMassCalculator.Capacity` sums `Capacity(pawn) × count` over the pawns. It covers caravans, transport pods, shuttles and gifts.
+- The caravan dialog's per-pawn `+X kg` (`TransferableOneWayWidget.DrawMass`) is `Capacity(pawn, null) − GearMass − InventoryMass`.
+- `ITab_Pawn_Gear.TryDrawMassInfo`, `MassUtility.FreeSpace` / `UnboundedEncumbrancePercent` (encumbrance) and `FactionGiftUtility.CheckCanCarryGift` also call it once.
+
+The caravan mass tab shows `(load support x1.36 = 47.7 kg)` on each pawn's line. A formed caravan caches its total and refreshes it on vanilla's own dirty events.
+
+### Exactly once per pawn: the re-entrancy guard
+
+Load Support only ever enters mass capacity through this postfix. A value that contains it twice therefore means the postfix ran on an input that already held its own output. The reproducible way this happens is **re-entrancy**: another mod computes a pawn's mass capacity *from inside* `MassUtility.Capacity` by calling it again for the same pawn. A typical case is a hook that returns a modded "mass carry capacity" stat whose worker reads the patched method, guarded against its own recursion. The inner call is already scaled; without a guard, the outer call scales it again:
+
+```
+info card (stat, computed outside):   35 × 1.04 × LS              ✓
+caravan  (outer Capacity → stat → inner Capacity):
+   inner: 35 × LS,  stat: × 1.04,  outer postfix: × LS  →  35 × 1.04 × LS × LS   ✗ (ratio caravan/info card = LS)
+```
+
+The prefix and finalizer keep a per-thread stack of the pawns whose capacity is being computed. **A call is scaled only if no nested call for the same pawn was already scaled inside it.** Nested calls for a *different* pawn are independent and are scaled normally.
+
+This works whether the other mod hooks with a prefix, with a postfix before Parametric's, or with a postfix after it (all tested). An exception inside the method unwinds the stack through the finalizer. The guard costs about 0.01 µs per call and allocates nothing.
 
 ## 9. Cache architecture
 
@@ -223,6 +245,7 @@ There is no `ModsConfig.IsActive(...)`, no DefName checks, no per-bionic XML, an
   - Pawns whose manipulators are at or below 100% are **exactly** unaffected, because the compensation is 1.
   - Multiplicative parts commute and are exact in every case (verified ×2).
   - Fixing this would mean transpiling `StatWorker` or removing the vanilla factor globally, so it is accepted for v0.1. A vanilla flat `CarryingCapacity` offset is applied *before* capacity factors, so it is compensated correctly (test "offset +50 + 300% arms").
+- **Mass capacity: stored values fed back in.** The re-entrancy guard (§8) covers a mod that computes mass capacity *inside* `MassUtility.Capacity`. It can't see a mod that **stores** an already-scaled result and returns it from a *later, separate* call (for example, a prefix returning a cached stat value). There is no nesting to detect, so that value gets Load Support again. The mass trace (§12) flags this case with `WARNING: incoming equals Parametric's previous OUTPUT`. The integration test "P6" reproduces it.
 - A Manipulation worker that is replaced or re-mathed by another mod gets the Y / X ratio fallback (§7) for superhuman pawns. It is exact for multiplicative influences; additive capMod offsets are then approximated.
 - Moving capMods use `SetMaxDefined` only; `statFactorMod` on capMods is not read (vanilla 1.6 never reads that field either).
 - A missing foot disables that leg for the lower region, exactly like vanilla's limb math.
@@ -231,7 +254,12 @@ There is no `ModsConfig.IsActive(...)`, no DefName checks, no per-bionic XML, an
 ## 12. Debug tools
 
 - **Settings → Parametric → Debug logging** (off by default). Logs a breakdown when one of your pawns is first measured or changes by more than 0.005, plus a startup report listing the stat's real capacity factors, its parts in execution order, and Parametric's Harmony patches.
-- **Dev-mode debug actions**, category **Parametric**: *Load Support: log pawn (click)*, *log all pawns on map*, *benchmark*, *clear cache*.
+- **Dev-mode debug actions**, category **Parametric**: *Load Support: log pawn (click)*, *log all pawns on map*, *benchmark*, *clear cache*, and the mass-capacity tools below.
+- **Mass-capacity trace** (for compatibility reports; off by default and costs nothing when unarmed):
+  - *Load Support: trace mass capacity (click pawn)* or *(any pawn)* arms a one-shot trace. It first logs every Harmony patch (prefixes, postfixes, transpilers, finalizers, with **owner IDs**, priority and execution order) on `MassUtility.Capacity`, `CollectionsMassCalculator.*`, the caravan and transporter dialogs' mass methods, the gear tab, gift checks, and any other patched method whose name mentions mass, capacity or carry. It also lists StatDefs mentioning mass or carry, with their worker and parts.
+  - For each of the next 24 distinct `MassUtility.Capacity` calls it then logs: the pawn; the nesting depth (overall and same-pawn); whether an explanation was passed; the value entering Parametric's postfix and its ratio to vanilla `BodySize × 35`; Load Support; the decision (`Scaled`, `AlreadyScaledInside`, …); the outgoing value; the settings; the tick; and a 14-frame managed call stack.
+  - Warnings flag an incoming value that already appears to contain Load Support, or that equals Parametric's previous output. Repeated identical calls (the caravan dialog redraws every frame) are counted, not re-logged, and the trace disarms itself.
+  - *Load Support: report mass-capacity patches* logs just the patch report. *stop mass trace* disarms early.
 
 ```
 [Parametric:LoadSupport] Troga (Human1234) changed 1.00 -> 2.10
@@ -256,7 +284,7 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 `Tests/run-tests.sh` runs both suites under Mono. The latest output is in `Tests/last-run.txt`.
 
 1. **FormulaTests** (pure math, no RimWorld): curve targets, 33 scenarios, monotonicity and continuity sweeps, NaN/∞ protection, and 200k random fuzz inputs. **All pass.**
-2. **IntegrationTests** (149 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
+2. **IntegrationTests** (168 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
    - Parametric's real patches (exactly 3 methods; nothing left under the old ID).
    - StatPart injection: idempotent, appended after `StatPart_BodySize`, clears `immutable`.
    - Synthetic human, quadruped, blob and tentacle bodies through vanilla limb and part efficiency.
@@ -272,6 +300,13 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
    - Runtime factor configurations: weight 0.5, max 1.0, allowedDefect 0.2, useReciprocal, no Manipulation factor, and an extra non-Manipulation capacity factor (preserved).
    - **Other mods' StatParts** inserted before Parametric's: multiplicative ×2 (exact) and additive +100 kg (measured; see §11).
    - `MassUtility` = BodySize × 35 × LS with no compensation (healthy, missing arm, bionic, 300% arms, 300% body), plus the setting toggles.
+   - **Caravan / mass-capacity chain** through the real `MassUtility.Capacity`, `CollectionsMassCalculator.Capacity` (with and without explanation) and the dialog's `Capacity − GearMass`. It checks that Parametric's prefix, postfix and finalizer are each registered exactly once. Test-only third-party patches:
+     - a plain ×1.04 postfix;
+     - a **stat-backed prefix that re-enters the method** (reproduced ×LS² with the guard off, ×LS once with it on, and traced);
+     - stat-backed postfixes before and after Parametric's;
+     - a nested call for a different pawn (still scaled);
+     - an exception inside the method (the stack unwinds);
+     - a stored-value re-feed (the documented limitation, flagged by the trace).
    - Cache behaviour: silent change stays cached; 1000-tick expiry; the **real `HediffSet.DirtyCache()`** postfix; clock rollback; settings generation; weak keys; zero-allocation lookups.
    - Benchmarks.
 
@@ -286,6 +321,7 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 | Manipulation compensation, limbs ≤ 100% (most pawns) | ~0.02 µs (early out) |
 | Manipulation compensation, superhuman limbs (exact neutral-limb path) | ~0.16 µs (~0.23 µs with 3 extra hediffs) |
 | `GetStatValue(CarryingCapacity)` | ~0.23 µs vanilla → ~0.51 µs with Parametric (bionic-armed pawn) |
+| `MassUtility.Capacity` | ~0.03 µs vanilla → ~0.18 µs with Parametric (re-entrancy guard itself ~0.01 µs, 0 bytes) |
 
 **Still to check in-game:** real vanilla BodyDef XML, the settings UI, save/load, removing a bionics mod, a live caravan, and TPS on a real colony. Use the debug actions.
 
@@ -318,16 +354,17 @@ Source/Parametric/
     LoadSupportCache.cs                 weak-keyed ephemeral cache
     ManipulationCompensation.cs         removal of vanilla's superhuman Manipulation-limb bonus (neutral-limb level)
     StatPart_LoadSupport.cs             CarryingCapacity integration
-    HarmonyPatches.cs                   the 3 postfixes
+    HarmonyPatches.cs                   the 3 patched methods (mass capacity + re-entrancy guard, DirtyCache, inspect pane)
     LoadSupportLog.cs                   "[Parametric:LoadSupport] " prefix
-  Debug/ParametricDebug.cs              namespace Parametric.Debug
+  Debug/ParametricDebug.cs              namespace Parametric.Debug (breakdowns, dev-mode actions)
+  Debug/MassCapacityTrace.cs            one-shot mass-capacity trace + Harmony owner report
 ```
 
-### Harmony patches (all postfixes)
+### Harmony patches
 
 | Target | Why |
 |---|---|
-| `MassUtility.Capacity(Pawn, StringBuilder)` | Inventory and caravan mass × Load Support (`Priority.Last`) |
+| `MassUtility.Capacity(Pawn, StringBuilder)` | Inventory and caravan mass × Load Support: postfix (`Priority.Last`), plus a prefix (`Priority.First`) and finalizer for the same-pawn re-entrancy guard |
 | `HediffSet.DirtyCache()` | Cache invalidation (flips a bool) |
 | `Pawn.GetInspectString()` | Optional inspect-pane line (one bool check when off) |
 
