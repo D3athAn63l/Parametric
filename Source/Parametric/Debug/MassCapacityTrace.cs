@@ -17,7 +17,7 @@ namespace Parametric.Debug
     /// <see cref="Armed"/> bool. When armed from the dev-mode debug menu, the next <see cref="MaxRecords"/> distinct
     /// calls (optionally for one pawn) are logged with: pawn, nesting depth (overall and same-pawn), whether an
     /// explanation StringBuilder was passed, the value entering Parametric's postfix, Load Support, the decision,
-    /// the outgoing value, settings, game tick and a short managed call stack. Repeated identical calls (the caravan
+    /// the Overload decision (routine multiplier), the outgoing value, settings, game tick and a short managed call stack. Repeated identical calls (the caravan
     /// dialog redraws every frame) are counted, not re-logged. The trace disarms itself.
     /// Arming also logs every Harmony patch (with owner IDs) on the mass-capacity call chain.
     /// </summary>
@@ -61,7 +61,8 @@ namespace Parametric.Debug
             target = null;
         }
 
-        public static void Record(Pawn p, bool hasExplanation, int frame, float incoming, float factor, MassCapacityDecision decision, float outgoing)
+        public static void Record(Pawn p, bool hasExplanation, int frame, float incoming, float factor, MassCapacityDecision decision,
+                                  float overloadFactor, OverloadDecision overload, float outgoing)
         {
             if (!Armed) return;
             try
@@ -74,7 +75,7 @@ namespace Parametric.Debug
                 int same = Patch_MassUtility_Capacity.SamePawnDepth(p, frame);
                 string stack = ShortStack();
                 string key = Label(p) + "|d" + d + "|s" + same + "|" + hasExplanation + "|" + incoming.ToString("0.###") + "|"
-                             + decision + "|" + outgoing.ToString("0.###") + "|" + stack;
+                             + decision + "|" + overload + "|" + outgoing.ToString("0.###") + "|" + stack;
                 int n;
                 repeats.TryGetValue(key, out n);
                 repeats[key] = n + 1;
@@ -98,21 +99,25 @@ namespace Parametric.Debug
                 float prev;
                 if (p != null && lastOutput.TryGetValue(p.thingIDNumber, out prev) && prev > 0f && Math.Abs(incoming - prev) > 0.001f)
                     sb.Append("  incoming / previous Parametric output for this pawn = x").Append((incoming / prev).ToString("0.###")).Append('\n');
-                else if (p != null && lastOutput.TryGetValue(p.thingIDNumber, out prev) && Math.Abs(incoming - prev) <= 0.001f && decision == MassCapacityDecision.Scaled)
+                else if (p != null && lastOutput.TryGetValue(p.thingIDNumber, out prev) && Math.Abs(incoming - prev) <= 0.001f
+                         && (decision == MassCapacityDecision.Scaled || overload == OverloadDecision.Applied))
                     sb.Append("  WARNING: incoming equals Parametric's previous OUTPUT for this pawn (a stored, already-scaled value was fed back in)\n");
                 sb.Append("Load Support: ").Append(SafeLoadSupport(p).ToString("0.###")).Append('\n');
                 sb.Append("Decision: ").Append(decision).Append(decision == MassCapacityDecision.Scaled ? " (x" + factor.ToString("0.###") + ")" : "").Append('\n');
+                sb.Append("Overload: ").Append(overload).Append(overload == OverloadDecision.Applied ? " (x" + overloadFactor.ToString("0.###") + ", policy "
+                          + Parametric.Overload.OverloadFormula.PolicyLabel(Parametric.Overload.OverloadUtility.PolicyFor(p)) + ")" : "").Append('\n');
                 sb.Append("Outgoing result: ").Append(outgoing.ToString("0.###")).Append(" kg\n");
                 ParametricSettings s = ParametricMod.Settings;
                 if (s != null)
                     sb.Append("Settings: enabled=").Append(s.loadSupportEnabled).Append(" mass=").Append(s.applyToMassCapacity)
                       .Append(" nonHumanlike=").Append(s.includeNonHumanlike).Append(" exponent=").Append(s.superhumanExponent.ToString("0.##"))
-                      .Append(" nestingGuard=").Append(Patch_MassUtility_Capacity.NestingGuardEnabled).Append('\n');
+                      .Append(" nestingGuard=").Append(Patch_MassUtility_Capacity.NestingGuardEnabled)
+                      .Append(" overload=").Append(s.overloadEnabled).Append('\n');
                 sb.Append("Tick: ").Append(SafeTick()).Append('\n');
                 sb.Append("Call stack (innermost first):\n").Append(stack.Replace(" <- ", "\n"));
                 Emit(sb.ToString());
 
-                if (p != null && decision == MassCapacityDecision.Scaled) lastOutput[p.thingIDNumber] = outgoing;
+                if (p != null && (decision == MassCapacityDecision.Scaled || overload == OverloadDecision.Applied)) lastOutput[p.thingIDNumber] = outgoing;
                 logged++;
                 if (logged >= MaxRecords) Disarm("record limit");
             }

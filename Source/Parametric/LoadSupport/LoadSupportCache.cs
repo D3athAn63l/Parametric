@@ -70,6 +70,11 @@ namespace Parametric.LoadSupport
 
             LoadSupportResult fresh = LoadSupportCalculator.Calculate(pawn);
 
+            // A lower Load Support found by the timer (no DirtyCache event) may leave carried cargo above the routine
+            // limit: let Overload check it (coalesced; ignored when nothing droppable is carried).
+            if (hadPrevious && fresh.LoadSupport < previous.LoadSupport - 0.0005f)
+                Parametric.Overload.OverloadGameComponent.Notify_CapacityMayHaveDropped(pawn);
+
             e.Result = fresh;
             e.ComputedTick = now;
             e.Generation = generation;

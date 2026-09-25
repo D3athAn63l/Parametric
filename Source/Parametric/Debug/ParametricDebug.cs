@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using LudeonTK;
 using Parametric.LoadSupport;
+using Parametric.Overload;
 using RimWorld;
 using Verse;
 
@@ -63,11 +64,41 @@ namespace Parametric.Debug
                 sb.Append("Final Inventory/Caravan Mass Capacity: " + finalMass.ToString("0.#") + " kg");
                 if (ParametricMod.Settings != null && !ParametricMod.Settings.LoadSupportAppliesTo(pawn))
                     sb.Append("\n(NOTE: Load Support disabled for this pawn by settings; final = base)");
+                sb.Append("\n").Append(DescribeOverload(pawn));
             }
             catch (Exception ex)
             {
                 sb.Append("Capacity read failed: " + ex.Message);
             }
+            return sb.ToString();
+        }
+
+        /// <summary>Overload section of the pawn report (explicit debug request only).</summary>
+        public static string DescribeOverload(Pawn pawn)
+        {
+            var sb = new StringBuilder("Overload:");
+            if (!OverloadUtility.Active) return sb.Append(" module disabled").ToString();
+            float policy = OverloadUtility.PolicyFor(pawn);
+            float comfortable = OverloadUtility.ComfortableCapacity(pawn);
+            float mass = OverloadUtility.ActualSupportedMass(pawn);
+            float factor = OverloadUtility.CurrentFactor(pawn);
+            OverloadGameComponent comp = OverloadGameComponent.Instance;
+            sb.Append("\n  Comfortable capacity: ").Append(comfortable.ToString("0.##")).Append(" kg");
+            sb.Append("\n  Routine overload policy: ").Append(OverloadFormula.PolicyLabel(policy))
+              .Append(OverloadUtility.IsPlayerPawn(pawn) ? (OverloadUtility.HasIndividualPolicy(pawn) ? " (individual)" : " (player default)") : " (non-player policy)")
+              .Append(OverloadUtility.IsExempt(pawn) ? " [trade pawn: left to vanilla]" : "");
+            sb.Append("\n  Routine capacity multiplier: x").Append(OverloadFormula.RoutineMultiplier(policy).ToString("0.##"));
+            sb.Append("\n  Routine exposed capacity: ").Append(OverloadUtility.RoutineCapacity(pawn).ToString("0.##")).Append(" kg");
+            sb.Append("\n  Current supported mass: ").Append(mass.ToString("0.##")).Append(" kg (gear ").Append(MassUtility.GearMass(pawn).ToString("0.##"))
+              .Append(", droppable inventory ").Append(OverloadReconciler.DroppableCargoMass(pawn).ToString("0.##")).Append(")");
+            Thing carried = pawn.carryTracker != null ? pawn.carryTracker.CarriedThing : null;
+            if (carried != null)
+                sb.Append("\n  Hand-carried (not part of mass; hand-carry limit): ").Append(carried.LabelCap).Append(" x").Append(carried.stackCount)
+                  .Append(" / ").Append(pawn.carryTracker.MaxStackSpaceEver(carried.def));
+            sb.Append("\n  Current load ratio: ").Append(OverloadFormula.LoadRatio(mass, comfortable).ToStringPercent());
+            sb.Append("\n  Reactive overload factor: ").Append(factor.ToStringPercent())
+              .Append(OverloadUtility.InWalkingContext(pawn) ? "" : " (not walking: caravan/holder)");
+            sb.Append("\n  Reconciliation queued: ").Append(comp != null && comp.IsQueued(pawn));
             return sb.ToString();
         }
 
@@ -206,6 +237,15 @@ namespace Parametric.Debug
             Log.Message(LoadSupportLog.Prefix + "Benchmark over " + pawns.Count + " pawns: full body evaluation "
                         + uncachedUs.ToString("0.00") + " µs/pawn, cached lookup " + cachedUs.ToString("0.000")
                         + " µs/pawn, manipulation compensation +" + Math.Max(0, compUs).ToString("0.000") + " µs/query.");
+        }
+
+        [DebugAction("Parametric", "Overload: reconcile now (click pawn)", actionType = DebugActionType.ToolMapForPawns,
+            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        private static void DebugOverloadReconcile(Pawn p)
+        {
+            if (p == null) return;
+            OverloadReconcileReport r = OverloadReconciler.Reconcile(p);
+            Log.Message(OverloadLog.Prefix + OverloadReconciler.Describe(p, r) + "\n" + DescribeOverload(p));
         }
 
         [DebugAction("Parametric", "Load Support: trace mass capacity (click pawn)", actionType = DebugActionType.ToolMapForPawns,

@@ -3,7 +3,7 @@
   <name>Parametric</name>
   <author>aRed</author>
   <packageId>aRed.Parametric</packageId>
-  <modVersion>0.1.1</modVersion>
+  <modVersion>0.2.0</modVersion>
   <url>https://github.com/D3athAn63l/Parametric</url>
   <supportedVersions>
     <li>1.6</li>
@@ -19,7 +19,7 @@
   <loadAfter>
     <li>brrainz.harmony</li>
   </loadAfter>
-  <description>Parametric is a lightweight background systems mod. Its first module, Load Support, derives each pawn's carrying capability from its actual body.
+  <description>Parametric is a lightweight background systems mod. Load Support derives each pawn's carrying capability from its actual body. Overload lets pawns carry past their comfortable capacity, at a reactive cost in movement.
 
 Load Support
 Each pawn gets a Load Support multiplier (healthy = x1.00) worked out from the current state of its legs, core (spine, pelvis, torso) and arms. Missing limbs lower it; prosthetics, bionics, archotech parts and modded replacement parts raise it.
@@ -29,7 +29,15 @@ Each pawn gets a Load Support multiplier (healthy = x1.00) worked out from the c
 - There is a structural bottleneck: super-legs on a normal spine help, but the spine limits them.
 - Multiplies the existing carrying capacity, so genes, traits, body size and other mods are kept. Vanilla's Manipulation factor is corrected so arms aren't counted twice.
 - Optionally also applies to inventory and caravan mass.
-- Nothing is written to your save. Safe to add or remove mid-game.
+
+Overload
+Each player pawn gets an Overload gizmo (No overload / 75% / 50% / 25% / 10%) that sets how far past its comfortable mass capacity normal loading may go.
+- Movement slows continuously with the mass the pawn actually supports (x0.75 at 125% of comfortable, x0.25 at 175%). The chosen percentage is a loading limit, not a speed guarantee.
+- If injuries lower a pawn's capacity, excess droppable cargo spills, with partial stacks split. Armor and weapons are never stripped; if they alone are too heavy, the pawn is simply very slow.
+- Non-player pawns use a global policy, so wounded raiders drop loot. Trade caravans are left to vanilla.
+- Right-click the gizmo to apply a pawn's setting to the whole colony.
+
+Saves: Load Support stores nothing. Overload stores only the individual policies you choose. Safe to add mid-game.
 
 Requires Harmony.</description>
 </ModMetaData>

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.2.0: Overload module
+
+### Added: Overload
+A pawn has a **comfortable** mass capacity: the real `MassUtility.Capacity` with every legitimate influence including Load Support, but never Overload. The player may let ordinary loading go past it.
+- **Reactive slowdown:** MoveSpeed × (2 − actual mass / comfortable), continuous and recomputed from live gear and inventory mass on every evaluation (×0.90 at 110%, ×0.50 at 150%, ×0.25 at 175%). The applied factor never goes below ×0.05 (effectively immobilized). Vanilla handles a MoveSpeed of 0, but other code may divide by it. Never Downed.
+- **Per-pawn policy gizmo** (No overload / 75% / 50% / 25% / 10%):
+  - Routine capacity = comfortable × (2 − policy), which is what vanilla and hauling mods see through `MassUtility.Capacity`.
+  - Right click applies the pawn's setting to all colony pawns.
+  - The tooltip shows live comfortable capacity, routine limit, supported mass and factor.
+  - The policy is a loading limit, not a movement guarantee: if the body weakens, the factor can fall below it.
+- **Event-driven excess-cargo spill:**
+  - Triggers: an injury or other `HediffSet.DirtyCache` event, a Load Support drop, a stricter policy, or a settings change. Each queues one reconciliation per pawn, coalesced over about 30 ticks and run from `GameComponentTick` (no polling, no colony scans).
+  - It drops droppable inventory cargo, largest stack mass first, splitting the last stack with vanilla `ThingOwner.TryDrop`. It never strips armor, unequips weapons or destroys items.
+  - The part of a hand-carried stack above the pawn's current vanilla carry limit spills too.
+  - Unavoidable gear leaves the pawn reactively overloaded.
+- **Settings:** Enable Overload (on); default policy for player pawns (100%) and for non-player pawns (100%). Individual policies are saved in a `GameComponent`, keyed by the pawn's permanent ID, and pruned when pawns no longer exist.
+- **Trade pawns** (traders and trade-caravan lords) are left to vanilla. Vanilla's trader generator assigns wares to carriers by stack count, not mass, so their pack animals are overpacked by design.
+- **Debug:** an Overload block in the pawn report, *Overload: reconcile now (click pawn)*, and Overload decisions in the mass-capacity trace.
+
+### Changed
+- `MassUtility.Capacity` applies two transforms (Load Support, then the Overload routine multiplier). The PR #2 same-pawn re-entrancy guard now keeps one flag per transform and marks a transform whenever it is applied (×1 included). Each transform is exactly once per pawn per logical calculation even with a VEF-style recursive mass stat and Load Support exactly 1. The comfortable-capacity query skips only Parametric's Overload step for that pawn.
+- New `Pawn.GetGizmos` postfix (4 patched methods) and a `MoveSpeed` StatPart.
+- Parametric now writes one small `GameComponent` to saves. Removing the mod from a save logs one "could not find class" error on load; RimWorld drops the component and continues.
+
+### Upgrading
+- With the default 100% policies, no capacity changes. Pawns already carrying more than their comfortable capacity (for example a badly injured colonist in heavy armor, or a pawn that came off a caravan with an uneven share of its cargo) now move slower. The first body change after that may spill their droppable inventory down to the routine limit.
+
+### Tests
+- The formula suite adds Overload: exact policy → capacity and load → factor tables, the 200% floor, inverse-curve consistency, monotonicity, continuity, invalid inputs, excess and partial-stack maths, and 200k fuzz inputs.
+- The integration suite has 238 checks (was 168).
+  - They run through real `ThingOwner` inventories and `Thing.SplitOff`, the real `Pawn_CarryTracker`, a real MoveSpeed StatWorker, real injuries via `HediffSet.DirtyCache`, and a real Scribe save/load.
+  - Every scenario from the design is covered, including the raid thief, the heavy raider, the hand-carrying thief, gold-at-the-edge, policy tightening, burst coalescing and the PR #2 re-entrancy cases A–F.
+- Benchmarks: policy lookup ~0.02 µs; MoveSpeed ~0.37–0.45 µs with Overload (0.10 µs without); 0 bytes allocated on the hot paths.
+
 ## 0.1.1: Parametric (Load Support module)
 
 ### Renamed

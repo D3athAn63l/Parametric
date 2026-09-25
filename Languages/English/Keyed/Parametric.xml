@@ -39,4 +39,40 @@
   <LoadSupport_SettingInspect>Show Load Support in the pawn inspect pane</LoadSupport_SettingInspect>
   <LoadSupport_SettingInspectDesc>Adds a "Load support: x1.23" line to the selected pawn's inspect pane. The full breakdown is always visible in the Carrying capacity stat tooltip on the pawn's info card.</LoadSupport_SettingInspectDesc>
 
+  <!-- ===================== Overload module ===================== -->
+  <Overload_SectionHeader>Overload</Overload_SectionHeader>
+  <Overload_SectionDesc>Lets pawns carry more than their comfortable mass capacity. The further past comfortable they actually are, the slower they move. Each player pawn has an Overload gizmo.</Overload_SectionDesc>
+  <Overload_SettingEnabled>Enable Overload</Overload_SettingEnabled>
+  <Overload_SettingEnabledDesc>Routine mass capacity above comfortable (per pawn policy), movement slowdown from the mass a pawn actually supports, and spilling of droppable cargo when a pawn can no longer hold it. Turning this off makes Overload change nothing.</Overload_SettingEnabledDesc>
+  <Overload_SettingPlayerDefault>Default policy for player pawns</Overload_SettingPlayerDefault>
+  <Overload_SettingNonPlayerDefault>Policy for non-player pawns (raiders, visitors...)</Overload_SettingNonPlayerDefault>
+  <Overload_SettingDefaultsDesc>Player pawns without an individual setting use the player default. Non-player pawns always use the non-player policy. Trade caravans and traders are left to vanilla.</Overload_SettingDefaultsDesc>
+
+  <!-- Gizmo -->
+  <Overload_GizmoLabel>Overload: {0}</Overload_GizmoLabel>
+  <Overload_Off>Off</Overload_Off>
+  <Overload_NoOverloadOption>No overload (100%)</Overload_NoOverloadOption>
+  <Overload_GizmoDesc>Overload limit
+
+Controls how much extra mass normal loading may place on this pawn. Lower values allow more cargo but permit a stronger movement slowdown.
+
+The slowdown itself reacts to the mass the pawn actually carries. A 25% setting does not set movement to 25%: it allows loading up to the point where the overload factor would reach 25%.
+
+If injuries or other changes lower the pawn's capacity after loading, excess droppable cargo falls. Worn and equipped mass is never dropped, so it can push movement below this setting.
+
+This only sets Parametric's overload factor. Injuries, equipment, terrain and other systems can lower movement further.
+
+Right-click: apply this setting to all colony pawns.</Overload_GizmoDesc>
+  <Overload_GizmoLive>Comfortable capacity: {0}
+Routine load limit: {1}
+Current supported mass: {2}
+Current overload factor: {3}</Overload_GizmoLive>
+  <Overload_GizmoIndividual>(individual setting)</Overload_GizmoIndividual>
+  <Overload_ApplyToColony>Apply {0} overload limit to all colony pawns</Overload_ApplyToColony>
+  <Overload_AppliedMessage>Parametric: Overload {0} applied to {1} pawns.</Overload_AppliedMessage>
+
+  <!-- Stats -->
+  <Overload_MoveSpeedExplanation>Parametric overload ({0} of comfortable load): {1}</Overload_MoveSpeedExplanation>
+  <Overload_MassExplanation>(overload limit {0}: {1} = {2})</Overload_MassExplanation>
+
 </LanguageData>
