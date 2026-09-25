@@ -208,6 +208,34 @@ namespace Parametric.Debug
                         + " µs/pawn, manipulation compensation +" + Math.Max(0, compUs).ToString("0.000") + " µs/query.");
         }
 
+        [DebugAction("Parametric", "Load Support: trace mass capacity (click pawn)", actionType = DebugActionType.ToolMapForPawns,
+            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        private static void DebugTraceMassPawn(Pawn p)
+        {
+            if (p == null) return;
+            MassCapacityTrace.Arm(p);
+            Messages.Message("Parametric: tracing the next " + MassCapacityTrace.MaxRecords + " mass-capacity calculations of " + p.LabelShort
+                             + ". Open the info card and the caravan dialog, then check the log.", MessageTypeDefOf.NeutralEvent, false);
+        }
+
+        [DebugAction("Parametric", "Load Support: trace mass capacity (any pawn)", allowedGameStates = AllowedGameStates.Playing)]
+        private static void DebugTraceMassAny()
+        {
+            MassCapacityTrace.Arm(null);
+        }
+
+        [DebugAction("Parametric", "Load Support: stop mass trace", allowedGameStates = AllowedGameStates.Playing)]
+        private static void DebugTraceMassStop()
+        {
+            MassCapacityTrace.Disarm("stopped by user");
+        }
+
+        [DebugAction("Parametric", "Load Support: report mass-capacity patches", allowedGameStates = AllowedGameStates.Playing)]
+        private static void DebugMassPatchReport()
+        {
+            Log.Message(LoadSupportLog.Prefix + MassCapacityTrace.PatchReport());
+        }
+
         [DebugAction("Parametric", "Load Support: clear cache", allowedGameStates = AllowedGameStates.Playing)]
         private static void DebugClear()
         {

@@ -22,6 +22,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using HarmonyLib;
 using Parametric;
+using Parametric.Debug;
 using Parametric.LoadSupport;
 using RimWorld;
 using Verse;
@@ -72,6 +73,8 @@ static class IntegrationTests
     }
     static bool ConsciousnessStub(ref float __result) { __result = TestConsciousness; return false; }
     static bool OneStub(ref float __result) { __result = 1f; return false; }
+    static bool TranslateStub(string key, ref TaggedString __result) { __result = key; return false; } // no LanguageWorker outside the game
+    static bool ResolveStub(TaggedString taggedStr, ref string __result) { __result = taggedStr.RawText; return false; } // no colour tables either
 
     static IEnumerable<CodeInstruction> NoDlcTranspiler(IEnumerable<CodeInstruction> instructions)
     {
@@ -116,6 +119,8 @@ static class IntegrationTests
                 transpiler: new HarmonyMethod(typeof(IntegrationTests).GetMethod("NoRenderTranspiler", BindingFlags.Static | BindingFlags.NonPublic)));
         h.Patch(AccessTools.Method(typeof(SummaryHealthHandler), "Notify_HealthChanged"), Stub("Skip"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_Consciousness), "CalculateCapacityLevel"), Stub("ConsciousnessStub"));
+        h.Patch(AccessTools.Method(typeof(TranslatorFormattedStringExtensions), "Translate", new[] { typeof(string), typeof(NamedArgument), typeof(NamedArgument) }), Stub("TranslateStub"));
+        h.Patch(AccessTools.Method(typeof(ColoredText), "Resolve", new[] { typeof(TaggedString) }), Stub("ResolveStub"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_Breathing), "CalculateCapacityLevel"), Stub("OneStub"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_BloodPumping), "CalculateCapacityLevel"), Stub("OneStub"));
     }
@@ -269,6 +274,31 @@ static class IntegrationTests
     // Stands in for another mod's Harmony postfix on the vanilla Manipulation worker (1 = result-preserving).
     static float ModdedWorkerScale = 1f;
     static void ModdedManipulationWorker(ref float __result) { __result *= ModdedWorkerScale; }
+    // ---------------- TEST-ONLY stand-ins for other mods' mass-capacity hooks (never shipped) ----------------
+    const string ThirdPartyId = "thirdparty.masstest";
+    static bool inFakeStat, inCross;
+    static Pawn CrossPawnOwner, CrossPawnPartner;
+    static bool ThrowNext;
+    static readonly Dictionary<Pawn, float> StoredMass = new Dictionary<Pawn, float>();
+    // A modded "mass carry capacity" stat whose worker reads the PATCHED MassUtility.Capacity and applies a strength factor.
+    static float FakeMassStat(Pawn p)
+    {
+        bool old = inFakeStat; inFakeStat = true;
+        try { return MassUtility.Capacity(p, null) * 1.04f; } finally { inFakeStat = old; }
+    }
+    static bool ThirdPartyStatPrefix(Pawn p, ref float __result) { if (inFakeStat) return true; __result = FakeMassStat(p); return false; }
+    static void ThirdPartyStatPostfix(Pawn p, ref float __result) { if (inFakeStat) return; __result = FakeMassStat(p); }
+    static void ThirdPartyFactorPostfix(ref float __result) { __result *= 1.04f; }
+    static void ThirdPartyCrossPawnPostfix(Pawn p, ref float __result)
+    {
+        if (inCross || p != CrossPawnOwner) return;
+        inCross = true;
+        try { __result += MassUtility.Capacity(CrossPawnPartner, null); } finally { inCross = false; }
+    }
+    static void ThirdPartyThrowingPrefix() { if (ThrowNext) { ThrowNext = false; throw new InvalidOperationException("third-party test exception"); } }
+    static bool ThirdPartyCachingPrefix(Pawn p, ref float __result) { float v; if (StoredMass.TryGetValue(p, out v)) { __result = v; return false; } return true; }
+    static void ThirdPartyCachingPostfix(Pawn p, float __result) { StoredMass[p] = __result; }
+
     static void PartOffset(Pawn p, BodyPartRecord part, float offset)
     {
         var d = MakeDef("TestPartBuff", typeof(Hediff));
@@ -771,6 +801,124 @@ static class IntegrationTests
         Check("non-humanlike toggle on -> animal reduced", MassUtility.Capacity(beast, null) < 35f);
         Check("animal (no arms): CarryingCapacity compensation not applied", Math.Abs(ManipulationCompensation.Compute(carryStat, beast, LoadSupportCache.GetResult(beast)) - 1f) < 1e-6f);
 
+        // ================= Caravan / mass-capacity chain: Load Support exactly once per pawn =================
+        // Vanilla 1.6: CollectionsMassCalculator.Capacity sums MassUtility.Capacity(pawn) once per pawn; the caravan dialog's
+        // per-pawn "+X kg" (TransferableOneWayWidget.DrawMass) is MassUtility.Capacity(pawn, null) - gear - inventory.
+        // The patterns below are TEST-ONLY stand-ins for other mods' hooks (owner "thirdparty.masstest").
+        Console.WriteLine("\n=== Caravan / mass-capacity chain: Load Support exactly once per pawn ===");
+        var third = new Harmony(ThirdPartyId);
+        MethodInfo massCap = AccessTools.Method(typeof(MassUtility), nameof(MassUtility.Capacity), new[] { typeof(Pawn), typeof(System.Text.StringBuilder) });
+        Pawn duster = Human("Duster"); duster.stackCount = 1; duster.Name = new NameSingle("Duster");
+        InstallAll(duster, BodyPartTagDefOf.MovingLimbCore, mod3Leg); InstallAll(duster, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm);
+        Install(duster, Parts(duster, BodyPartTagDefOf.Spine)[0], mod3Spine); Install(duster, Parts(duster, BodyPartTagDefOf.Pelvis)[0], mod3Pelvis); PartOffset(duster, duster.RaceProps.body.corePart, 2f);
+        Pawn mate = Human("Mate"); mate.stackCount = 1; mate.Name = new NameSingle("Mate"); InstallAll(mate, BodyPartTagDefOf.MovingLimbCore, bionicLeg);
+        float L = LoadSupportCache.GetResult(duster, true).LoadSupport, Lm = LoadSupportCache.GetResult(mate, true).LoadSupport;
+        const float B = 35f, STR = 1.04f; // vanilla base and the "other mod's" strength factor
+        Func<Pawn, float> caravanCap = x => CollectionsMassCalculator.Capacity(new List<ThingCount> { new ThingCount(x, 1) }, null);
+        Func<Pawn, float> caravanCapExpl = x => CollectionsMassCalculator.Capacity(new List<ThingCount> { new ThingCount(x, 1) }, new System.Text.StringBuilder());
+        Func<Pawn, float> infoCard = x => FakeMassStat(x);                    // the other mod's "mass carry capacity" stat
+        Func<Pawn, float> dialogPlus = x => MassUtility.Capacity(x, null) - MassUtility.GearMass(x); // DrawMass (no inventory here)
+        Action<string, float> massRow = (label, expected) =>
+            Console.WriteLine(string.Format("  {0,-62} Capacity {1,9:0.0}  caravan {2,9:0.0}  caravan+expl {3,9:0.0}  +X {4,9:0.0}  expected {5,9:0.0}",
+                label, MassUtility.Capacity(duster, null), caravanCap(duster), caravanCapExpl(duster), dialogPlus(duster), expected));
+        Func<float, bool> allEqual = expected => Near(MassUtility.Capacity(duster, null), expected, 0.001f) && Near(caravanCap(duster), expected, 0.001f)
+                                                 && Near(caravanCapExpl(duster), expected, 0.001f) && Near(dialogPlus(duster), expected, 0.001f);
+        Console.WriteLine("  Duster stand-in: 300% body, Load Support " + L.ToString("0.000") + "; other mod's strength factor x" + STR);
+
+        Check("Parametric registers exactly one prefix, one postfix and one finalizer on MassUtility.Capacity",
+            Harmony.GetPatchInfo(massCap).Prefixes.Count(x => x.owner == ParametricMod.HarmonyId) == 1
+            && Harmony.GetPatchInfo(massCap).Postfixes.Count(x => x.owner == ParametricMod.HarmonyId) == 1
+            && Harmony.GetPatchInfo(massCap).Finalizers.Count(x => x.owner == ParametricMod.HarmonyId) == 1);
+
+        massRow("vanilla chain only", B * L);
+        Check("vanilla chain: Capacity = caravan = caravan with explanation = dialog +X = 35 x LS", allEqual(B * L));
+
+        // Pattern 0: a plain multiplicative postfix (e.g. a strength stat applied to mass capacity) - composes, one LS.
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyFactorPostfix", BindingFlags.Static | BindingFlags.NonPublic)));
+        massRow("P0 plain x1.04 postfix", B * STR * L);
+        Check("P0 plain multiplicative postfix: 35 x 1.04 x LS everywhere", allEqual(B * STR * L));
+        third.UnpatchAll(ThirdPartyId);
+
+        // Pattern 1: a prefix that replaces mass capacity with a stat whose worker reads the (patched) method again,
+        // guarded against its own recursion. This is the re-entrant shape that doubles Load Support.
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+        Patch_MassUtility_Capacity.NestingGuardEnabled = false;
+        float p1Old = MassUtility.Capacity(duster, null), p1OldCaravan = caravanCap(duster), p1OldCard = infoCard(duster);
+        Console.WriteLine(string.Format("  {0,-62} Capacity {1,9:0.0}  caravan {2,9:0.0}  info card {3,9:0.0}   <- reproduces the report (ratio x{4:0.00} = LS)",
+            "P1 stat-backed prefix, nesting guard OFF (pre-fix)", p1Old, p1OldCaravan, p1OldCard, p1Old / p1OldCard));
+        Check("P1 reproduced without the guard: info card 35 x 1.04 x LS, caravan 35 x 1.04 x LS x LS",
+            Near(p1OldCard, B * STR * L, 0.001f) && Near(p1OldCaravan, B * STR * L * L, 0.001f) && Near(p1OldCaravan / p1OldCard, L, 0.001f));
+        Patch_MassUtility_Capacity.NestingGuardEnabled = true;
+        massRow("P1 stat-backed prefix (guard ON)", B * STR * L);
+        Check("P1 stat-backed prefix: Load Support exactly once everywhere (35 x 1.04 x LS), info card agrees", allEqual(B * STR * L) && Near(infoCard(duster), B * STR * L, 0.001f));
+
+        // Trace of the same call: proves depth 2 inner scaled, depth 1 outer skipped.
+        var traced = new List<string>();
+        int logMark = logLines.Count;
+        MassCapacityTrace.Sink = traced.Add;
+        MassCapacityTrace.Arm(duster);
+        MassUtility.Capacity(duster, null);
+        MassCapacityTrace.Disarm("test");
+        MassCapacityTrace.Sink = null;
+        string traceText = string.Join("\n", traced.ToArray());
+        Console.WriteLine("  --- trace excerpt (guard ON) ---");
+        foreach (string line in traceText.Split('\n'))
+            if (line.StartsWith("Depth") || line.StartsWith("Decision") || line.StartsWith("Incoming") || line.StartsWith("Outgoing") || line.Contains("[MassTrace] #") || line.Contains("WARNING"))
+                Console.WriteLine("    " + line);
+        Check("trace: patch report lists both owners on MassUtility.Capacity", traced.Count > 0 && traced[0].Contains(ParametricMod.HarmonyId) && traced[0].Contains(ThirdPartyId) && traced[0].Contains("Finalizers"));
+        Check("trace: inner call (depth 2, same pawn nested) Scaled, outer call (depth 1) AlreadyScaledInside",
+            traceText.Contains("Depth: 2 (same-pawn enclosing calls: 1)") && traceText.Contains("Decision: Scaled") && traceText.Contains("Decision: AlreadyScaledInside"));
+        Check("trace: outer call flagged 'incoming already appears to contain Load Support'", traceText.Contains("WARNING: the incoming value already appears to contain Load Support"));
+        Check("trace: call stack names the third-party patch", traceText.Contains("ThirdPartyStatPrefix"));
+        Check("trace: disarms itself; nothing traced afterwards", !MassCapacityTrace.Armed);
+        third.UnpatchAll(ThirdPartyId);
+
+        // Pattern 2/3: same stat-backed replacement done in a POSTFIX, before and after Parametric's postfix.
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPostfix", BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.High });
+        massRow("P2 stat-backed postfix, runs BEFORE Parametric", B * STR * L);
+        Check("P2 stat-backed postfix before ours: Load Support exactly once", allEqual(B * STR * L));
+        third.UnpatchAll(ThirdPartyId);
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPostfix", BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.Last, after = new[] { ParametricMod.HarmonyId } });
+        massRow("P3 stat-backed postfix, runs AFTER Parametric", B * STR * L);
+        Check("P3 stat-backed postfix after ours: Load Support exactly once (not lost, not doubled)", allEqual(B * STR * L));
+        third.UnpatchAll(ThirdPartyId);
+
+        // Pattern 4: a nested call for ANOTHER pawn is independent and still gets that pawn's Load Support.
+        CrossPawnPartner = mate; CrossPawnOwner = duster;
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyCrossPawnPostfix", BindingFlags.Static | BindingFlags.NonPublic)));
+        float p4 = MassUtility.Capacity(duster, null), p4exp = (B + B * Lm) * L;
+        Console.WriteLine(string.Format("  {0,-62} Capacity {1,9:0.0}  expected (35 + 35 x LSmate) x LS {2,9:0.0}; mate alone {3,7:0.0}", "P4 nested call for a different pawn (mate added)", p4, p4exp, MassUtility.Capacity(mate, null)));
+        Check("P4 nested call for a different pawn: that pawn is scaled by its own Load Support (not suppressed)", Near(p4, p4exp, 0.001f) && Near(MassUtility.Capacity(mate, null), B * Lm, 0.001f));
+        third.UnpatchAll(ThirdPartyId);
+        CrossPawnPartner = CrossPawnOwner = null;
+
+        // Pattern 5: an exception thrown by another patch inside a nested call must not leave the guard stack dirty.
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyThrowingPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+        ThrowNext = true;
+        bool threw = false;
+        try { MassUtility.Capacity(duster, null); } catch (Exception) { threw = true; }
+        third.UnpatchAll(ThirdPartyId);
+        Check("P5 exception inside the patched method: propagates, depth returns to 0, next call is 35 x LS", threw && Patch_MassUtility_Capacity.Depth == 0 && Near(MassUtility.Capacity(duster, null), B * L, 0.001f));
+
+        // Pattern 6 (NOT fixable here, documented): a mod that stores an already-scaled result and feeds it back in a
+        // LATER, non-nested call. No nesting exists, so the guard cannot see it; the trace flags it instead.
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyCachingPrefix", BindingFlags.Static | BindingFlags.NonPublic)),
+                    postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyCachingPostfix", BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.Last, after = new[] { ParametricMod.HarmonyId } });
+        StoredMass.Clear();
+        traced.Clear(); MassCapacityTrace.Sink = traced.Add; MassCapacityTrace.Arm(duster);
+        float first = MassUtility.Capacity(duster, null);  // 35 x LS, stored by the "other mod"
+        float second = MassUtility.Capacity(duster, null); // stored value fed back in -> x LS again
+        MassCapacityTrace.Disarm("test"); MassCapacityTrace.Sink = null;
+        third.UnpatchAll(ThirdPartyId);
+        Console.WriteLine(string.Format("  {0,-62} first {1,9:0.0}  second {2,9:0.0} (x{3:0.00})", "P6 stored-value re-feed (limitation)", first, second, second / first));
+        foreach (string line in string.Join("\n", traced.ToArray()).Split('\n')) if (line.Contains("WARNING")) Console.WriteLine("    trace:" + line);
+        Check("P6 stored-value re-feed: trace flags the incoming value as Parametric's previous output / already containing LS",
+            string.Join("\n", traced.ToArray()).Contains("WARNING: incoming equals Parametric's previous OUTPUT") || string.Join("\n", traced.ToArray()).Contains("WARNING: the incoming value already appears to contain Load Support"));
+        logLines.RemoveRange(logMark, logLines.Count - logMark); // trace output is expected here, not an error
+
+        Check("all third-party test patches removed; Parametric's still present", !Harmony.GetPatchInfo(massCap).Owners.Contains(ThirdPartyId) && Harmony.GetPatchInfo(massCap).Owners.Contains(ParametricMod.HarmonyId));
+        Check("after all patterns: vanilla chain back to 35 x LS, guard depth 0", allEqual(B * L) && Patch_MassUtility_Capacity.Depth == 0);
+
         // ================= Cache =================
         Console.WriteLine("\n=== Cache: dirty events, time expiry, settings generation, clock rollback, weak keys ===");
         ticks.SetValue(tm, 10000);
@@ -830,6 +978,20 @@ static class IntegrationTests
         double pipeOn = Bench("GetStatValue(CarryingCapacity) with Parametric", 200000, () => Carry(t));
         double pipeOff = Bench("GetStatValue(CarryingCapacity) Parametric bypassed", 200000, () => CarryVanilla(t));
         Console.WriteLine("  => Parametric adds ~" + Math.Max(0, pipeOn - pipeOff).ToString("0.000") + " µs per CarryingCapacity evaluation; compensation itself ~" + comp.ToString("0.000") + " µs");
+        MethodInfo massCapM = AccessTools.Method(typeof(MassUtility), nameof(MassUtility.Capacity), new[] { typeof(Pawn), typeof(System.Text.StringBuilder) });
+        double massOnUs = Bench("MassUtility.Capacity with Parametric (prefix+postfix+finalizer)", 1000000, () => MassUtility.Capacity(t, null));
+        Bench("  of which nesting guard alone (Prefix + Finalizer)", 5000000, () => { int st; Patch_MassUtility_Capacity.Prefix(t, out st); Patch_MassUtility_Capacity.Finalizer(st); });
+        var parametricHarmony = new Harmony(ParametricMod.HarmonyId);
+        parametricHarmony.Unpatch(massCapM, HarmonyPatchType.All, ParametricMod.HarmonyId);
+        double massOffUs = Bench("MassUtility.Capacity vanilla (Parametric unpatched)", 1000000, () => MassUtility.Capacity(t, null));
+        parametricHarmony.PatchAll(typeof(ParametricMod).Assembly);
+        Console.WriteLine("  => Parametric adds ~" + Math.Max(0, massOnUs - massOffUs).ToString("0.000") + " µs per MassUtility.Capacity call");
+        long m0 = GC.GetTotalMemory(false);
+        for (int i = 0; i < 100000; i++) MassUtility.Capacity(t, null);
+        long m1 = GC.GetTotalMemory(false);
+        Check("MassUtility.Capacity with Parametric allocates nothing measurable (" + (m1 - m0) + " bytes / 100k)", m1 - m0 < 16 * 1024);
+        Check("re-patched after benchmark: exactly one Parametric prefix/postfix/finalizer", Harmony.GetPatchInfo(massCapM).Postfixes.Count(x => x.owner == ParametricMod.HarmonyId) == 1
+              && Harmony.GetPatchInfo(massCapM).Prefixes.Count(x => x.owner == ParametricMod.HarmonyId) == 1 && Harmony.GetPatchInfo(massCapM).Finalizers.Count(x => x.owner == ParametricMod.HarmonyId) == 1);
 
         Console.WriteLine("\n=== Log output captured during tests ===");
         var errors = logLines.FindAll(s => s.IndexOf("Parametric", StringComparison.Ordinal) >= 0 || s.IndexOf("rror", StringComparison.Ordinal) >= 0);

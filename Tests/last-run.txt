@@ -80,12 +80,12 @@
   ok:   uniform sweep monotonic
   ok:   no discontinuity around 100% (max step < 0.05)
   ok:   200k random inputs (incl. negative, absent regions, bad exponents) always valid
-  info: formula cost 0.124 µs/call (sink 1179415)
+  info: formula cost 0.121 µs/call (sink 1179415)
 
 ALL FORMULA TESTS PASSED
 
 ### Integration tests
-Tests/IntegrationTests.cs(468,15): warning CS0219: The constant `X_' is never used
+Tests/IntegrationTests.cs(498,15): warning CS0219: The constant `X_' is never used
 Compilation succeeded - 1 warning(s)
 === Harmony: applying Parametric's patches to real 1.6 methods ===
   patched: RimWorld.MassUtility.Capacity(Pawn, StringBuilder)
@@ -380,6 +380,48 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   ok:   non-humanlike toggle on -> animal reduced
   ok:   animal (no arms): CarryingCapacity compensation not applied
 
+=== Caravan / mass-capacity chain: Load Support exactly once per pawn ===
+  Duster stand-in: 300% body, Load Support 15.588; other mod's strength factor x1.04
+  ok:   Parametric registers exactly one prefix, one postfix and one finalizer on MassUtility.Capacity
+  vanilla chain only                                             Capacity     545.6  caravan     545.6  caravan+expl     545.6  +X     545.6  expected     545.6
+  ok:   vanilla chain: Capacity = caravan = caravan with explanation = dialog +X = 35 x LS
+  P0 plain x1.04 postfix                                         Capacity     567.4  caravan     567.4  caravan+expl     567.4  +X     567.4  expected     567.4
+  ok:   P0 plain multiplicative postfix: 35 x 1.04 x LS everywhere
+  P1 stat-backed prefix, nesting guard OFF (pre-fix)             Capacity    8845.2  caravan    8845.2  info card     567.4   <- reproduces the report (ratio x15.59 = LS)
+  ok:   P1 reproduced without the guard: info card 35 x 1.04 x LS, caravan 35 x 1.04 x LS x LS
+  P1 stat-backed prefix (guard ON)                               Capacity     567.4  caravan     567.4  caravan+expl     567.4  +X     567.4  expected     567.4
+  ok:   P1 stat-backed prefix: Load Support exactly once everywhere (35 x 1.04 x LS), info card agrees
+  --- trace excerpt (guard ON) ---
+    [Parametric:LoadSupport][MassTrace] #1
+    Depth: 2 (same-pawn enclosing calls: 1)
+    Incoming MassUtility result (entering Parametric postfix): 35 kg
+    Decision: Scaled (x15.588)
+    Outgoing result: 545.596 kg
+    [Parametric:LoadSupport][MassTrace] #2
+    Depth: 1 (same-pawn enclosing calls: 0)
+    Incoming MassUtility result (entering Parametric postfix): 567.42 kg
+      WARNING: the incoming value already appears to contain Load Support (x15.59)
+    Decision: AlreadyScaledInside
+    Outgoing result: 567.42 kg
+  ok:   trace: patch report lists both owners on MassUtility.Capacity
+  ok:   trace: inner call (depth 2, same pawn nested) Scaled, outer call (depth 1) AlreadyScaledInside
+  ok:   trace: outer call flagged 'incoming already appears to contain Load Support'
+  ok:   trace: call stack names the third-party patch
+  ok:   trace: disarms itself; nothing traced afterwards
+  P2 stat-backed postfix, runs BEFORE Parametric                 Capacity     567.4  caravan     567.4  caravan+expl     567.4  +X     567.4  expected     567.4
+  ok:   P2 stat-backed postfix before ours: Load Support exactly once
+  P3 stat-backed postfix, runs AFTER Parametric                  Capacity     567.4  caravan     567.4  caravan+expl     567.4  +X     567.4  expected     567.4
+  ok:   P3 stat-backed postfix after ours: Load Support exactly once (not lost, not doubled)
+  P4 nested call for a different pawn (mate added)               Capacity    1258.8  expected (35 + 35 x LSmate) x LS    1258.8; mate alone    45.8
+  ok:   P4 nested call for a different pawn: that pawn is scaled by its own Load Support (not suppressed)
+  ok:   P5 exception inside the patched method: propagates, depth returns to 0, next call is 35 x LS
+  P6 stored-value re-feed (limitation)                           first     545.6  second    8505.0 (x15.59)
+    trace:  WARNING: the incoming value already appears to contain Load Support (x15.59)
+    trace:  WARNING: incoming equals Parametric's previous OUTPUT for this pawn (a stored, already-scaled value was fed back in)
+  ok:   P6 stored-value re-feed: trace flags the incoming value as Parametric's previous output / already containing LS
+  ok:   all third-party test patches removed; Parametric's still present
+  ok:   after all patterns: vanilla chain back to 35 x LS, guard depth 0
+
 === Cache: dirty events, time expiry, settings generation, clock rollback, weak keys ===
   ok:   refresh interval is 1000 ticks
   ok:   silent change, within interval -> cached value reused
@@ -392,15 +434,21 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   ok:   cached lookups allocate nothing measurable (0 bytes / 100k)
 
 === Benchmarks (Mono JIT, outside Unity; in-game numbers will differ) ===
-  full body evaluation (uncached)                                9.512 µs
-  cached lookup                                                  0.105 µs
-  manipulation compensation, superhuman arms (exact path)        0.156 µs
-  manipulation compensation, limbs <= 100% (early out)           0.020 µs
-  manipulation compensation, 300% arms + 3 other hediffs         0.225 µs
-  whole StatPart.TransformValue (cached LS + compensation)       0.324 µs
-  GetStatValue(CarryingCapacity) with Parametric                 0.507 µs
-  GetStatValue(CarryingCapacity) Parametric bypassed             0.228 µs
-  => Parametric adds ~0.280 µs per CarryingCapacity evaluation; compensation itself ~0.156 µs
+  full body evaluation (uncached)                                9.994 µs
+  cached lookup                                                  0.120 µs
+  manipulation compensation, superhuman arms (exact path)        0.163 µs
+  manipulation compensation, limbs <= 100% (early out)           0.021 µs
+  manipulation compensation, 300% arms + 3 other hediffs         0.229 µs
+  whole StatPart.TransformValue (cached LS + compensation)       0.322 µs
+  GetStatValue(CarryingCapacity) with Parametric                 0.594 µs
+  GetStatValue(CarryingCapacity) Parametric bypassed             0.260 µs
+  => Parametric adds ~0.334 µs per CarryingCapacity evaluation; compensation itself ~0.163 µs
+  MassUtility.Capacity with Parametric (prefix+postfix+finalizer)     0.177 µs
+    of which nesting guard alone (Prefix + Finalizer)            0.010 µs
+  MassUtility.Capacity vanilla (Parametric unpatched)            0.027 µs
+  => Parametric adds ~0.149 µs per MassUtility.Capacity call
+  ok:   MassUtility.Capacity with Parametric allocates nothing measurable (0 bytes / 100k)
+  ok:   re-patched after benchmark: exactly one Parametric prefix/postfix/finalizer
 
 === Log output captured during tests ===
   Tried to use an uninitialized DefOf of type BodyPartTagDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
@@ -412,4 +460,4 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   Tried to get a resource "UI/Icons/LifeStage/Adult" from a different thread. All resources must be loaded in the main thread.
   ok:   no errors and no Parametric log lines during tests (debug logging off)
 
-ALL 149 INTEGRATION CHECKS PASSED
+ALL 168 INTEGRATION CHECKS PASSED

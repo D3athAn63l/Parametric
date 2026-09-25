@@ -16,6 +16,11 @@
   - Limbs **> 100%**: only the above-normal limb bonus is removed.
 - **Additive Manipulation capMods are handled exactly.** The systemic share is now the pawn's real Manipulation with **100% limbs**. `CalculateManipulationWithNeutralLimbs` reproduces vanilla 1.6's capMod phase: hediff and active-gene offsets, postFactors with `capacityFactorEffectMultiplier`, `EvaluateSetMax`, `minValue` and `RoundedHundredth`. This replaces the old Y / X estimate. Bionic arms + Manipulation +50% now give 117.1 kg instead of 109.3 kg, and 300% arms + setMax 120% give 84.9 kg instead of 34.0 kg.
   - The calculation checks itself by reproducing the real level from the real limbs. If a mod replaces or re-maths the Manipulation worker, it falls back to Y / X, but only for superhuman limbs. A result-preserving Harmony patch keeps the exact path.
+- **Load Support could be applied twice to a pawn's inventory/caravan mass capacity** when another mod computes that pawn's mass capacity from *inside* `MassUtility.Capacity`. The typical case is a hook that returns a modded "mass carry capacity" stat whose worker reads the patched method again, guarded against its own recursion. The inner call already carried Load Support, and Parametric's postfix on the outer call multiplied it again. The info card showed `base × LS`, the caravan dialog `base × LS × LS`, a ratio of exactly LS.
+  - Confirmed in game with the new mass trace. Vanilla Expanded Framework transpiles `MassUtility.Capacity` to return its `VEF_MassCarryCapacity` stat, whose worker calls `MassUtility.Capacity` again for the same pawn. With a 50.41 Load Support pawn, the caravan dialog showed about 92,500 kg while the info card showed 1835 kg. It now shows +1832 kg (1835 minus gear) in both places. The fix is generic: nothing references VEF.
+  - Vanilla 1.6 calls `MassUtility.Capacity` once per pawn on every path (verified in the assembly), so this needs a re-entrant hook.
+  - A per-thread same-pawn re-entrancy guard (prefix + finalizer, ~0.01 µs, no allocation) now scales a call only if no nested call for the same pawn was already scaled inside it. Nested calls for other pawns are still scaled.
+  - A mod that *stores* an already-scaled value and returns it from a later, separate call is not covered and is documented; the new trace flags it.
 - **StatPart ordering documentation.** `priority` does not control runtime order (only `StatDef.PostLoad` sorts, once, at def load). The part runs after existing parts because it is appended after load. Comments and README are corrected.
 
 ### Changed
@@ -35,7 +40,19 @@
   - a Harmony-patched Manipulation worker (exact path and fallback);
   - multiplicative and additive StatParts from "another mod";
   - MassUtility staying uncompensated.
-- 149 integration checks and all formula tests pass.
+- Caravan / mass-capacity chain tests through the real `MassUtility.Capacity` and `CollectionsMassCalculator.Capacity`, with test-only third-party patches:
+  - a plain multiplicative postfix;
+  - a re-entrant stat-backed prefix (the ×LS² bug reproduced with the guard off, fixed with it on);
+  - stat-backed postfixes before and after Parametric's;
+  - a nested call for another pawn;
+  - an exception inside the method;
+  - a stored-value re-feed (documented limitation).
+- 168 integration checks and all formula tests pass.
+
+### Added
+- Dev-mode **mass-capacity trace** (*Load Support: trace mass capacity*):
+  - Arming it logs every Harmony patch owner on the mass-capacity chain, then the next 24 distinct `MassUtility.Capacity` calls. Each record has the depth, the incoming and outgoing values, Load Support, the decision, the settings, the tick and a short call stack, with warnings when an incoming value already contains Load Support.
+  - Off by default, bounded, and it disarms itself. *Report mass-capacity patches* logs the owner report alone.
 
 ### Documented
 - **Additive StatParts that run before Parametric's** are scaled by the compensation for pawns with superhuman manipulators (a +100 kg part counts as 33 kg with 300% arms). Pawns at or below 100% are unaffected, and multiplicative parts are exact. This is measured by a test and accepted for v0.1 (README §11).
