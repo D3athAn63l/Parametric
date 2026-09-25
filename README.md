@@ -220,6 +220,14 @@ caravan  (outer Capacity → stat → inner Capacity):
    inner: 35 × LS,  stat: × 1.04,  outer postfix: × LS  →  35 × 1.04 × LS × LS   ✗ (ratio caravan/info card = LS)
 ```
 
+**Confirmed in a real game** (dev-mode mass trace, v0.1.1):
+- Vanilla Expanded Framework transpiles `MassUtility.Capacity` to return its own `VEF_MassCarryCapacity` stat (via `SetCarryCapacity`). That stat's worker (`StatWorker_MassCarryCapacity.GetBaseValueFor`) calls `MassUtility.Capacity` again for the same pawn.
+- A stat part from another mod multiplied the stat by ×1.04.
+- The inner call returned 35 × 50.41 = 1764.5 kg, and the stat made it 1835.0 kg. Before the guard, the outer call multiplied it by 50.41 again, so the caravan dialog showed about 92,500 kg while the info card showed 1835 kg.
+- With the guard, the trace shows the inner call (depth 2) `Scaled` and the outer call (depth 1) `AlreadyScaledInside`. The caravan dialog shows +1832 kg (1835 minus the pawn's own gear), matching the info card.
+
+Nothing in Parametric names VEF. The guard works on the call pattern, so any framework that routes mass capacity through a stat reading the patched method is handled the same way.
+
 The prefix and finalizer keep a per-thread stack of the pawns whose capacity is being computed. **A call is scaled only if no nested call for the same pawn was already scaled inside it.** Nested calls for a *different* pawn are independent and are scaled normally.
 
 This works whether the other mod hooks with a prefix, with a postfix before Parametric's, or with a postfix after it (all tested). An exception inside the method unwinds the stack through the finalizer. The guard costs about 0.01 µs per call and allocates nothing.
