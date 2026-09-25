@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using Parametric.LoadSupport;
+using Parametric.Overload;
 
 static class FormulaTests
 {
@@ -35,6 +36,86 @@ static class FormulaTests
     static bool Valid(LoadSupportResult r)
     {
         return !float.IsNaN(r.LoadSupport) && !float.IsInfinity(r.LoadSupport) && r.LoadSupport > 0f;
+    }
+
+    static bool Eq(float a, float b, float tol = 1e-5f) { return Math.Abs(a - b) <= tol; }
+
+    // ---------------- Overload (pure math) ----------------
+    static void OverloadTests()
+    {
+        Console.WriteLine("\n=== Overload: policy -> routine capacity (comfortable 80 kg) ===");
+        float[] policies = { 1f, 0.75f, 0.5f, 0.25f, 0.10f };
+        float[] multipliers = { 1f, 1.25f, 1.5f, 1.75f, 1.9f };
+        float[] kg = { 80f, 100f, 120f, 140f, 152f };
+        for (int i = 0; i < policies.Length; i++)
+        {
+            float m = OverloadFormula.RoutineMultiplier(policies[i]), c = OverloadFormula.RoutineCapacity(80f, policies[i]);
+            Console.WriteLine(string.Format("  policy {0,4:0%}  multiplier x{1:0.00}  routine {2,6:0.0} kg", policies[i], m, c));
+            Check("policy " + policies[i].ToString("0%") + " -> x" + multipliers[i].ToString("0.00") + " -> " + kg[i] + " kg (TOTAL capacity, not +)", Eq(m, multipliers[i]) && Eq(c, kg[i], 1e-3f));
+        }
+        Check("presets are exactly 100/75/50/25/10%", OverloadFormula.Presets.Length == 5 && Eq(OverloadFormula.Presets[0], 1f) && Eq(OverloadFormula.Presets[4], 0.10f));
+
+        Console.WriteLine("\n=== Overload: reactive load -> movement factor (comfortable 80 kg) ===");
+        float[] mass = { 80f, 88f, 100f, 112f, 120f, 140f, 152f, 160f };
+        float[] expected = { 1f, 0.9f, 0.75f, 0.6f, 0.5f, 0.25f, 0.1f, 0f };
+        for (int i = 0; i < mass.Length; i++)
+        {
+            float raw = OverloadFormula.RawFactor(mass[i], 80f), applied = OverloadFormula.ReactiveFactor(mass[i], 80f);
+            Console.WriteLine(string.Format("  {0,5:0} / 80 kg = {1,4:0%}  raw x{2:0.00}  applied x{3:0.00}", mass[i], mass[i] / 80f, raw, applied));
+            Check(mass[i] + "/80 -> raw x" + expected[i].ToString("0.00"), Eq(raw, expected[i], 1e-5f));
+        }
+        Check("160/80 (200%): mathematical x0.00, applied = emergency minimum x" + OverloadFormula.EmergencyMinimumFactor,
+            Eq(OverloadFormula.RawFactor(160f, 80f), 0f) && Eq(OverloadFormula.ReactiveFactor(160f, 80f), OverloadFormula.EmergencyMinimumFactor));
+        Check("below comfortable (40/80) and exactly comfortable -> exactly 1", OverloadFormula.ReactiveFactor(40f, 80f) == 1f && OverloadFormula.ReactiveFactor(80f, 80f) == 1f);
+        Check("policy is inverse of the curve: loading exactly to the routine limit reaches the policy factor",
+            Array.TrueForAll(policies, pol => Eq(OverloadFormula.RawFactor(OverloadFormula.RoutineCapacity(80f, pol), 80f), pol, 1e-5f)));
+
+        // Monotonicity / continuity
+        bool mono = true, cont = true; float prev = 2f;
+        for (int i = 0; i <= 4000; i++)
+        {
+            float w = i * 0.1f; // 0..400 kg against 80
+            float f = OverloadFormula.ReactiveFactor(w, 80f);
+            if (f > prev + 1e-6f) mono = false;
+            if (i > 0 && Math.Abs(f - prev) > 0.0013f) cont = false; // 0.1 kg step on 80 kg = 0.00125
+            prev = f;
+        }
+        Check("monotonic non-increasing in mass (0..400 kg)", mono);
+        Check("continuous: no step larger than one 0.1 kg increment (no RPG thresholds)", cont);
+
+        // Invalid inputs
+        Check("invalid capacity (0, negative, NaN, inf) -> neutral 1",
+            OverloadFormula.ReactiveFactor(50f, 0f) == 1f && OverloadFormula.ReactiveFactor(50f, -10f) == 1f
+            && OverloadFormula.ReactiveFactor(50f, float.NaN) == 1f && OverloadFormula.ReactiveFactor(50f, float.PositiveInfinity) == 1f);
+        Check("invalid mass (NaN, negative, 0) -> neutral 1", OverloadFormula.ReactiveFactor(float.NaN, 80f) == 1f
+            && OverloadFormula.ReactiveFactor(-5f, 80f) == 1f && OverloadFormula.ReactiveFactor(0f, 80f) == 1f);
+        Check("infinite mass on valid capacity -> emergency minimum (finite, > 0)", Eq(OverloadFormula.ReactiveFactor(float.PositiveInfinity, 80f), OverloadFormula.EmergencyMinimumFactor));
+        Check("policy sanitising: NaN/inf/<=0/>1 -> 1 (no overload); 0.01 -> 0.10 floor",
+            OverloadFormula.SanitizePolicy(float.NaN) == 1f && OverloadFormula.SanitizePolicy(float.PositiveInfinity) == 1f
+            && OverloadFormula.SanitizePolicy(0f) == 1f && OverloadFormula.SanitizePolicy(-0.5f) == 1f && OverloadFormula.SanitizePolicy(1.7f) == 1f
+            && Eq(OverloadFormula.SanitizePolicy(0.01f), 0.10f));
+        Check("routine capacity with invalid comfortable never produces NaN/negative",
+            OverloadFormula.RoutineCapacity(float.NaN, 0.25f) == 0f && OverloadFormula.RoutineCapacity(-3f, 0.25f) == 0f && OverloadFormula.RoutineCapacity(0f, 0.25f) == 0f);
+
+        // Excess / partial stack maths
+        Check("excess: 135 kg at comfortable 60, policy 25% -> 30 kg", Eq(OverloadFormula.ExcessMass(135f, 60f, 0.25f), 30f, 1e-3f));
+        Check("excess: already within routine limit -> 0", OverloadFormula.ExcessMass(100f, 80f, 0.25f) == 0f);
+        Check("units to drop: 15 kg of 1 kg units from 75 -> 15", OverloadFormula.UnitsToDrop(15f, 1f, 75) == 15);
+        Check("units to drop: 15.2 kg of 1 kg units -> 16 (ceil)", OverloadFormula.UnitsToDrop(15.2f, 1f, 75) == 16);
+        Check("units to drop: bounded by the stack (100 kg of 1 kg units from 75 -> 75)", OverloadFormula.UnitsToDrop(100f, 1f, 75) == 75);
+        Check("units to drop: invalid inputs -> 0", OverloadFormula.UnitsToDrop(0f, 1f, 75) == 0 && OverloadFormula.UnitsToDrop(5f, 0f, 75) == 0
+              && OverloadFormula.UnitsToDrop(5f, float.NaN, 75) == 0 && OverloadFormula.UnitsToDrop(5f, 1f, 0) == 0);
+
+        // Fuzz
+        var rng = new Random(99); bool fuzz = true;
+        for (int i = 0; i < 200000; i++)
+        {
+            float w = (float)(rng.NextDouble() * 600 - 100), c = (float)(rng.NextDouble() * 300 - 50), pol = (float)(rng.NextDouble() * 2 - 0.5);
+            if (rng.Next(50) == 0) w = float.NaN; if (rng.Next(50) == 0) c = float.PositiveInfinity;
+            float f = OverloadFormula.ReactiveFactor(w, c), r = OverloadFormula.RoutineCapacity(c, pol), m = OverloadFormula.RoutineMultiplier(pol);
+            if (float.IsNaN(f) || f < OverloadFormula.EmergencyMinimumFactor || f > 1f || float.IsNaN(r) || r < 0f || m < 1f || m > 1.9f + 1e-6f) { fuzz = false; break; }
+        }
+        Check("200k random overload inputs: factor always in [0.05, 1], routine capacity finite and >= 0, multiplier in [1, 1.9]", fuzz);
     }
 
     static void Main()
@@ -156,6 +237,8 @@ static class FormulaTests
         float sink = 0; for (int i = 0; i < 1000000; i++) sink += Human(1.1f, 1.05f, 0.9f).LoadSupport;
         sw.Stop();
         Console.WriteLine("  info: formula cost " + (sw.Elapsed.TotalMilliseconds * 1000 / 1e6).ToString("0.000") + " µs/call (sink " + sink.ToString("0") + ")");
+
+        OverloadTests();
 
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "ALL FORMULA TESTS PASSED" : failures + " FAILURE(S)");

@@ -5,7 +5,8 @@ namespace Parametric
 {
     /// <summary>
     /// Mod settings for Parametric. Stored in RimWorld's Config folder, never in save files.
-    /// Fields are grouped per module; v0.1 has only the Load Support module plus mod-level debug logging.
+    /// Fields are grouped per module (Load Support, Overload) plus mod-level debug logging.
+    /// Overload's per-pawn policies are player state and live in the save (OverloadGameComponent), not here.
     /// </summary>
     public class ParametricSettings : ModSettings
     {
@@ -29,6 +30,20 @@ namespace Parametric
 
         public bool showInInspectPane = DefaultShowInInspectPane;
 
+        // ---------------- Overload module ----------------
+        public const bool DefaultOverloadEnabled = true;
+        public const float DefaultOverloadPlayerPolicy = 1f;     // 100% = no overload until the player chooses otherwise
+        public const float DefaultOverloadNonPlayerPolicy = 1f;
+
+        /// <summary>Module switch. Off = Overload changes nothing (no routine capacity, no slowdown, no cargo spill).</summary>
+        public bool overloadEnabled = DefaultOverloadEnabled;
+
+        /// <summary>Policy of player pawns without an individual setting (gizmo).</summary>
+        public float overloadPlayerDefault = DefaultOverloadPlayerPolicy;
+
+        /// <summary>Policy of every non-player pawn (raiders, visitors...); never stored per pawn.</summary>
+        public float overloadNonPlayerDefault = DefaultOverloadNonPlayerPolicy;
+
         // ---------------- Mod-level ----------------
         public const bool DefaultDebugLogging = false;
         public bool debugLogging = DefaultDebugLogging;
@@ -41,10 +56,17 @@ namespace Parametric
             Scribe_Values.Look(ref applyToMassCapacity, "applyToMassCapacity", DefaultApplyToMassCapacity);
             Scribe_Values.Look(ref includeNonHumanlike, "includeNonHumanlike", DefaultIncludeNonHumanlike);
             Scribe_Values.Look(ref showInInspectPane, "showInInspectPane", DefaultShowInInspectPane);
+            Scribe_Values.Look(ref overloadEnabled, "overloadEnabled", DefaultOverloadEnabled);
+            Scribe_Values.Look(ref overloadPlayerDefault, "overloadPlayerDefault", DefaultOverloadPlayerPolicy);
+            Scribe_Values.Look(ref overloadNonPlayerDefault, "overloadNonPlayerDefault", DefaultOverloadNonPlayerPolicy);
             Scribe_Values.Look(ref debugLogging, "debugLogging", DefaultDebugLogging);
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit)
+            {
                 superhumanExponent = LoadSupportFormula.ClampExponent(superhumanExponent);
+                overloadPlayerDefault = Parametric.Overload.OverloadFormula.SanitizePolicy(overloadPlayerDefault);
+                overloadNonPlayerDefault = Parametric.Overload.OverloadFormula.SanitizePolicy(overloadNonPlayerDefault);
+            }
         }
 
         public void ResetToDefaults()
@@ -54,6 +76,9 @@ namespace Parametric
             applyToMassCapacity = DefaultApplyToMassCapacity;
             includeNonHumanlike = DefaultIncludeNonHumanlike;
             showInInspectPane = DefaultShowInInspectPane;
+            overloadEnabled = DefaultOverloadEnabled;
+            overloadPlayerDefault = DefaultOverloadPlayerPolicy;
+            overloadNonPlayerDefault = DefaultOverloadNonPlayerPolicy;
             debugLogging = DefaultDebugLogging;
         }
 

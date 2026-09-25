@@ -12,34 +12,40 @@ namespace Parametric.LoadSupport
     /// Inventory / caravan mass capacity in RimWorld 1.6 is NOT the CarryingCapacity stat. It is
     /// MassUtility.Capacity = BodySize × 35 (0 if the pawn can never carry). Every caravan, transport pod,
     /// shuttle and trade-gift mass check funnels through CollectionsMassCalculator.Capacity, which calls this
-    /// method once per pawn; on-map encumbrance (MassUtility.IsOverEncumbered/FreeSpace), the gear tab and the
-    /// caravan dialog's per-pawn "+X kg" (TransferableOneWayWidget.DrawMass) call it too — each exactly once.
-    /// A single multiplicative postfix therefore covers caravans with no second subsystem, and it composes with
-    /// any other mod's postfix/prefix on the same method (we multiply whatever result we are handed).
-    /// MassUtility.Capacity has NO Manipulation factor, so no ManipulationCompensation is applied here.
+    /// method once per pawn; on-map encumbrance (MassUtility.IsOverEncumbered/FreeSpace), the gear tab, the
+    /// caravan dialog's per-pawn "+X kg" (TransferableOneWayWidget.DrawMass) and vanilla's pickup/pack/caravan
+    /// loading logic call it too — each exactly once. So this one method carries two Parametric transforms:
     ///
-    /// EXACTLY ONCE PER PAWN PER LOGICAL CALCULATION
+    ///   1. Load Support   ×LS                      (setting "apply to mass capacity")
+    ///   2. Overload       ×(2 − policy)            (Parametric.Overload; skipped for a comfortable-capacity query)
+    ///
+    ///   base/modded capacity × LS (once)            = comfortable capacity
+    ///   comfortable capacity × routine multiplier   = the value everyone else sees (routine / exposed capacity)
+    ///
+    /// EXACTLY ONCE PER PAWN PER LOGICAL CALCULATION (both transforms)
     ///   Another mod can compute a pawn's mass capacity from INSIDE this method by calling MassUtility.Capacity for
-    ///   the same pawn again (e.g. a prefix/postfix that turns mass capacity into a stat whose worker reads the
-    ///   patched method, guarded against its own recursion). The inner call already carries Load Support, so
-    ///   multiplying the outer result again gives base × LS × LS. The prefix/finalizer keep a tiny per-thread stack
-    ///   of the pawns whose Capacity is being computed; a call is scaled only if no nested call FOR THE SAME PAWN
-    ///   was already scaled inside it. Nested calls for OTHER pawns are independent and scaled normally.
-    ///   Cost: a few array writes per call, no allocation (the per-thread arrays are created once per thread).
+    ///   the same pawn again (confirmed in game: Vanilla Expanded Framework's transpiler returns its mass stat, whose
+    ///   worker reads the patched method). The prefix/finalizer keep a tiny per-thread stack of the pawns whose
+    ///   Capacity is being computed, with one flag PER TRANSFORM: a transform is applied in a call only if it was not
+    ///   already applied by a nested call for the same pawn, and applying it marks every enclosing same-pawn call.
+    ///   The flags are set whenever a transform is applied, whatever its factor (×1 included), so the guard never
+    ///   depends on Load Support or the policy being different from 1. Nested calls for OTHER pawns are independent.
+    ///   Cost: a few array writes per call, no allocation (per-thread arrays are created once per thread).
     /// </summary>
     [HarmonyPatch(typeof(MassUtility), nameof(MassUtility.Capacity))]
     [HarmonyPatch(new Type[] { typeof(Pawn), typeof(StringBuilder) })]
     public static class Patch_MassUtility_Capacity
     {
         /// <summary>
-        /// Diagnostic switch: false restores the pre-0.1.1 behaviour (every call scales). Only for reproducing
-        /// double scaling in tests/traces; never changed by the mod itself.
+        /// Diagnostic switch: false restores the pre-0.1.1 behaviour (every call applies both transforms). Only for
+        /// reproducing double scaling in tests/traces; never changed by the mod itself.
         /// </summary>
         public static bool NestingGuardEnabled = true;
 
         private const int MaxTrackedDepth = 32;
         [ThreadStatic] private static Pawn[] framePawn;
-        [ThreadStatic] private static bool[] frameScaled;
+        [ThreadStatic] private static bool[] frameLoadSupportDone;
+        [ThreadStatic] private static bool[] frameOverloadDone;
         [ThreadStatic] private static int depth;
 
         /// <summary>Current MassUtility.Capacity nesting depth on this thread (diagnostics).</summary>
@@ -58,9 +64,14 @@ namespace Parametric.LoadSupport
         [HarmonyPriority(Priority.First)]
         public static void Prefix(Pawn p, out int __state)
         {
-            if (framePawn == null) { framePawn = new Pawn[MaxTrackedDepth]; frameScaled = new bool[MaxTrackedDepth]; }
+            if (framePawn == null)
+            {
+                framePawn = new Pawn[MaxTrackedDepth];
+                frameLoadSupportDone = new bool[MaxTrackedDepth];
+                frameOverloadDone = new bool[MaxTrackedDepth];
+            }
             int d = depth;
-            if (d < MaxTrackedDepth) { framePawn[d] = p; frameScaled[d] = false; }
+            if (d < MaxTrackedDepth) { framePawn[d] = p; frameLoadSupportDone[d] = false; frameOverloadDone[d] = false; }
             depth = d + 1;
             __state = d + 1;
         }
@@ -70,29 +81,49 @@ namespace Parametric.LoadSupport
         {
             int frame = __state - 1;
             float incoming = __result;
-            float factor = 1f;
-            MassCapacityDecision decision = Decide(p, frame, __result, out factor);
 
-            if (decision == MassCapacityDecision.Scaled)
+            // ---- 1. Load Support ----
+            float lsFactor;
+            MassCapacityDecision decision = DecideLoadSupport(p, frame, __result, out lsFactor);
+            if (decision == MassCapacityDecision.Scaled || decision == MassCapacityDecision.Neutral)
             {
-                __result *= factor;
-                // Tell enclosing calls for the same pawn that Load Support is already inside their value.
-                if (framePawn != null)
-                    for (int i = Math.Min(frame, MaxTrackedDepth) - 1; i >= 0; i--)
-                        if (framePawn[i] == p) frameScaled[i] = true;
-
-                if (explanation != null)
+                MarkEnclosing(frameLoadSupportDone, p, frame);
+                if (decision == MassCapacityDecision.Scaled)
                 {
-                    // Vanilla wrote "  - Name: +35 kg" on the current line; extend that line.
-                    explanation.Append(" ");
-                    explanation.Append("LoadSupport_MassExplanation".Translate(
-                        factor.ToStringByStyle(ToStringStyle.FloatTwo, ToStringNumberSense.Factor),
-                        __result.ToStringMass()).Resolve());
+                    __result *= lsFactor;
+                    if (explanation != null)
+                    {
+                        // Vanilla wrote "  - Name: +35 kg" on the current line; extend that line.
+                        explanation.Append(" ");
+                        explanation.Append("LoadSupport_MassExplanation".Translate(
+                            lsFactor.ToStringByStyle(ToStringStyle.FloatTwo, ToStringNumberSense.Factor),
+                            __result.ToStringMass()).Resolve());
+                    }
+                }
+            }
+
+            // ---- 2. Overload (routine capacity) ----
+            float olFactor;
+            OverloadDecision ol = DecideOverload(p, frame, __result, out olFactor);
+            if (ol == OverloadDecision.Applied || ol == OverloadDecision.Neutral)
+            {
+                MarkEnclosing(frameOverloadDone, p, frame);
+                if (ol == OverloadDecision.Applied)
+                {
+                    __result *= olFactor;
+                    if (explanation != null)
+                    {
+                        explanation.Append(" ");
+                        explanation.Append("Overload_MassExplanation".Translate(
+                            Parametric.Overload.OverloadFormula.PolicyLabel(Parametric.Overload.OverloadFormula.SanitizePolicy(2f - olFactor)),
+                            olFactor.ToStringByStyle(ToStringStyle.FloatTwo, ToStringNumberSense.Factor),
+                            __result.ToStringMass()).Resolve());
+                    }
                 }
             }
 
             if (Parametric.Debug.MassCapacityTrace.Armed)
-                Parametric.Debug.MassCapacityTrace.Record(p, explanation != null, frame, incoming, factor, decision, __result);
+                Parametric.Debug.MassCapacityTrace.Record(p, explanation != null, frame, incoming, lsFactor, decision, olFactor, ol, __result);
         }
 
         public static void Finalizer(int __state)
@@ -105,19 +136,46 @@ namespace Parametric.LoadSupport
             }
         }
 
-        private static MassCapacityDecision Decide(Pawn p, int frame, float result, out float factor)
+        /// <summary>This call and every enclosing call for the same pawn now contain the transform.</summary>
+        private static void MarkEnclosing(bool[] flags, Pawn p, int frame)
+        {
+            if (framePawn == null || frame < 0) return;
+            if (frame < MaxTrackedDepth) flags[frame] = true;
+            for (int i = Math.Min(frame, MaxTrackedDepth) - 1; i >= 0; i--)
+                if (framePawn[i] == p) flags[i] = true;
+        }
+
+        private static bool DoneInside(bool[] flags, int frame)
+        {
+            return NestingGuardEnabled && flags != null && frame >= 0 && frame < MaxTrackedDepth && flags[frame];
+        }
+
+        private static MassCapacityDecision DecideLoadSupport(Pawn p, int frame, float result, out float factor)
         {
             factor = 1f;
             if (StatPart_LoadSupport.Bypass) return MassCapacityDecision.Bypassed;
             if (!(result > 0f)) return MassCapacityDecision.CannotCarry; // babies, non-pack animals...: leave untouched
             ParametricSettings s = ParametricMod.Settings;
             if (s == null || !s.applyToMassCapacity || !s.LoadSupportAppliesTo(p)) return MassCapacityDecision.DisabledBySettings;
-            if (NestingGuardEnabled && frame >= 0 && frame < MaxTrackedDepth && frameScaled != null && frameScaled[frame])
-                return MassCapacityDecision.AlreadyScaledInside;
+            if (DoneInside(frameLoadSupportDone, frame)) return MassCapacityDecision.AlreadyScaledInside;
 
             factor = LoadSupportCache.Get(p);
             if (!(factor > 0f) || float.IsInfinity(factor) || Math.Abs(factor - 1f) < 0.0001f) { factor = 1f; return MassCapacityDecision.Neutral; }
             return MassCapacityDecision.Scaled;
+        }
+
+        private static OverloadDecision DecideOverload(Pawn p, int frame, float result, out float factor)
+        {
+            factor = 1f;
+            if (StatPart_LoadSupport.Bypass) return OverloadDecision.Bypassed; // "Parametric off" measurement
+            if (!(result > 0f)) return OverloadDecision.CannotCarry;
+            if (!Parametric.Overload.OverloadUtility.Active) return OverloadDecision.Disabled;
+            if (p != null && p == Parametric.Overload.OverloadUtility.ComfortableQueryPawn) return OverloadDecision.ComfortableQuery;
+            if (DoneInside(frameOverloadDone, frame)) return OverloadDecision.AlreadyAppliedInside;
+
+            factor = Parametric.Overload.OverloadFormula.RoutineMultiplier(Parametric.Overload.OverloadUtility.PolicyFor(p));
+            if (Math.Abs(factor - 1f) < 0.0001f) { factor = 1f; return OverloadDecision.Neutral; }
+            return OverloadDecision.Applied;
         }
     }
 
@@ -131,19 +189,35 @@ namespace Parametric.LoadSupport
         Bypassed
     }
 
+    public enum OverloadDecision
+    {
+        Applied,
+        AlreadyAppliedInside,
+        Neutral,
+        ComfortableQuery,
+        CannotCarry,
+        Disabled,
+        Bypassed
+    }
+
     /// <summary>
     /// PATCH 2 — HediffSet.DirtyCache()   [Postfix]
     ///
     /// Vanilla calls this whenever the hediff set changes (hediff added/removed, part lost, prosthetic installed,
     /// part restored, stage change via Notify_HediffChanged…). We only flip a bool on our cache entry for that pawn —
     /// no allocation, no calculation. The time-based expiry in LoadSupportCache covers anything this misses.
+    /// Overload: drops the per-tick comfortable-capacity cache entry and queues one (coalesced) excess-cargo
+    /// reconciliation if the pawn carries droppable cargo on a map. Nothing is dropped from inside DirtyCache.
     /// </summary>
     [HarmonyPatch(typeof(HediffSet), nameof(HediffSet.DirtyCache))]
     public static class Patch_HediffSet_DirtyCache
     {
         public static void Postfix(HediffSet __instance)
         {
-            if (__instance != null) LoadSupportCache.MarkDirty(__instance.pawn);
+            if (__instance == null) return;
+            LoadSupportCache.MarkDirty(__instance.pawn);
+            Parametric.Overload.OverloadUtility.MarkDirty(__instance.pawn);
+            Parametric.Overload.OverloadGameComponent.Notify_CapacityMayHaveDropped(__instance.pawn);
         }
     }
 

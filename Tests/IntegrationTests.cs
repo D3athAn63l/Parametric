@@ -24,6 +24,7 @@ using HarmonyLib;
 using Parametric;
 using Parametric.Debug;
 using Parametric.LoadSupport;
+using Parametric.Overload;
 using RimWorld;
 using Verse;
 using OC = System.Reflection.Emit.OpCodes;
@@ -107,7 +108,9 @@ static class IntegrationTests
         foreach (MethodBase m in new MethodBase[] {
                      AccessTools.Method(typeof(StatWorker), "GetValueUnfinalized"),
                      AccessTools.Method(typeof(StatWorker), "FinalizeValue"),
-                     AccessTools.Method(typeof(PawnCapacityUtility), "CalculateCapacityLevel") })
+                     AccessTools.Method(typeof(PawnCapacityUtility), "CalculateCapacityLevel"),
+                     AccessTools.Method(typeof(ReliquaryUtility), "IsRelic"), // Thing.CanStackWith (inventory stack merging)
+                     AccessTools.Method(typeof(StatWorker), "GetOffsetsAndFactorsExplanation") })
             h.Patch(m, transpiler: noDlc);
         h.Patch(AccessTools.PropertyGetter(typeof(Prefs), "DevMode"), Stub("FalseGetter"));
         h.Patch(AccessTools.PropertyGetter(typeof(Find), "Scenario"), Stub("NullScenario"));
@@ -118,8 +121,12 @@ static class IntegrationTests
         h.Patch(AccessTools.Method(typeof(HediffSet), "DirtyCache"),
                 transpiler: new HarmonyMethod(typeof(IntegrationTests).GetMethod("NoRenderTranspiler", BindingFlags.Static | BindingFlags.NonPublic)));
         h.Patch(AccessTools.Method(typeof(SummaryHealthHandler), "Notify_HealthChanged"), Stub("Skip"));
+        h.Patch(AccessTools.Method(typeof(DeepProfiler), "Start"), Stub("Skip")); // Scribe loading profiles itself
+        h.Patch(AccessTools.Method(typeof(DeepProfiler), "End"), Stub("Skip"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_Consciousness), "CalculateCapacityLevel"), Stub("ConsciousnessStub"));
         h.Patch(AccessTools.Method(typeof(TranslatorFormattedStringExtensions), "Translate", new[] { typeof(string), typeof(NamedArgument), typeof(NamedArgument) }), Stub("TranslateStub"));
+        h.Patch(AccessTools.Method(typeof(TranslatorFormattedStringExtensions), "Translate", new[] { typeof(string), typeof(NamedArgument), typeof(NamedArgument), typeof(NamedArgument) }), Stub("TranslateStub"));
+        h.Patch(AccessTools.Method(typeof(TranslatorFormattedStringExtensions), "Translate", new[] { typeof(string), typeof(NamedArgument) }), Stub("TranslateStub"));
         h.Patch(AccessTools.Method(typeof(ColoredText), "Resolve", new[] { typeof(TaggedString) }), Stub("ResolveStub"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_Breathing), "CalculateCapacityLevel"), Stub("OneStub"));
         h.Patch(AccessTools.Method(typeof(PawnCapacityWorker_BloodPumping), "CalculateCapacityLevel"), Stub("OneStub"));
@@ -220,6 +227,15 @@ static class IntegrationTests
         typeof(Pawn_AgeTracker).GetField("cachedLifeStageIndex", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(age, 0);
         p.ageTracker = age;
         p.health = new Pawn_HealthTracker(p);
+        p.inventory = new Pawn_InventoryTracker(p);
+        p.carryTracker = new Pawn_CarryTracker(p);
+        p.apparel = new Pawn_ApparelTracker(p);
+        p.equipment = new Pawn_EquipmentTracker(p);
+        p.stackCount = 1;
+        p.Name = new NameSingle(name);
+        // GetUninitializedObject skips field initialisers: restore vanilla's "not spawned" state (-1), otherwise
+        // Thing.Spawned takes its error branch on every call.
+        typeof(Thing).GetField("mapIndexOrState", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(p, (sbyte)-1);
         return p;
     }
 
@@ -295,9 +311,89 @@ static class IntegrationTests
         inCross = true;
         try { __result += MassUtility.Capacity(CrossPawnPartner, null); } finally { inCross = false; }
     }
+    static void ThirdPartyReadsMoveSpeedPostfix(Pawn p) { if (moveStat != null) p.GetStatValue(moveStat, true, -1); } // e.g. a "speed-aware" capacity stat
     static void ThirdPartyThrowingPrefix() { if (ThrowNext) { ThrowNext = false; throw new InvalidOperationException("third-party test exception"); } }
     static bool ThirdPartyCachingPrefix(Pawn p, ref float __result) { float v; if (StoredMass.TryGetValue(p, out v)) { __result = v; return false; } return true; }
     static void ThirdPartyCachingPostfix(Pawn p, float __result) { StoredMass[p] = __result; }
+
+    // ---------------- Overload test helpers ----------------
+    static StatDef massStat, moveStat;
+    class TestDropper : IOverloadDropper
+    {
+        public readonly List<Thing> Ground = new List<Thing>();
+        public bool Context = true, FailPlacement;
+        public bool HasDropContext(Pawn pawn) { return Context; }
+        // Same vanilla split as ThingOwner.TryDrop (ThingOwner.Take -> Thing.SplitOff), minus the map placement.
+        public bool DropFromInventory(Pawn pawn, Thing thing, int count) { if (FailPlacement) return false; Ground.Add(pawn.inventory.innerContainer.Take(thing, count)); return true; }
+        public bool DropCarried(Pawn pawn, int count) { if (FailPlacement) return false; Ground.Add(pawn.carryTracker.innerContainer.Take(pawn.carryTracker.CarriedThing, count)); return true; }
+    }
+    static TestDropper CurrentDropper { get { return OverloadReconciler.Dropper as TestDropper; } }
+    static float GroundMass() { float m = 0f; foreach (Thing t in CurrentDropper.Ground) m += t.GetStatValue(StatDefOf.Mass, true, -1) * t.stackCount; return m; }
+    static int GroundCount(ThingDef def) { int n = 0; foreach (Thing t in CurrentDropper.Ground) if (t.def == def) n += t.stackCount; return n; }
+    static bool RunWith(Func<bool> f) { return f(); }
+    static ThingDef ItemDef(string name, float unitMass, int stackLimit, Type cls = null)
+    {
+        var d = New<ThingDef>(); // ThingDef ctor touches graphics (Unity)
+        d.defName = name; d.label = name; d.thingClass = cls ?? typeof(ThingWithComps); d.category = ThingCategory.Item; d.stackLimit = stackLimit;
+        var sm = new StatModifier(); sm.stat = massStat; sm.value = unitMass;
+        d.statBases = new List<StatModifier> { sm }; d.comps = new List<CompProperties>(); d.useHitPoints = false; d.alwaysHaulable = true;
+        return d;
+    }
+    static Thing MakeItem(ThingDef def, int count)
+    {
+        var t = (Thing)Activator.CreateInstance(def.thingClass);
+        t.def = def; t.stackCount = count; t.thingIDNumber = nextId++;
+        return t;
+    }
+    static void AddItem(Pawn p, ThingDef def, int count) { p.inventory.innerContainer.TryAdd(MakeItem(def, count), true); }
+    static Thing FindItem(Pawn p, ThingDef def) { foreach (Thing t in p.inventory.innerContainer) if (t.def == def) return t; return null; }
+    static void ClearInventory(Pawn p) { p.inventory.innerContainer.ClearAndDestroyContents(); }
+    static void Wear(Pawn p, float kg)
+    {
+        var a = (Apparel)MakeItem(ItemDef("TestArmor" + kg, kg, 1, typeof(Apparel)), 1);
+        // Bypass Wear()'s rendering side effects: put it straight into the worn list GearMass reads.
+        var owner = typeof(Pawn_ApparelTracker).GetField("wornApparel", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(p.apparel);
+        var list = (List<Apparel>)owner.GetType().GetField("innerList", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(owner);
+        list.Add(a);
+    }
+    static Pawn Player(Pawn p, Faction f) { p.SetFactionDirect(f); return p; }
+    // The line StatWorker appends for our part (vanilla's full explanation also needs Unity/scenario state).
+    static string OverloadExplanation(Pawn p) { foreach (StatPart part in moveStat.parts) if (part is StatPart_Overload) return part.ExplanationPart(StatRequest.For(p)); return null; }
+    /// <summary>
+    /// Real injuries on both legs, with the integer damage whose REAL Load Support (vanilla part efficiency) is closest
+    /// to the target. Candidates are tried silently and removed; the chosen damage is then applied with the real
+    /// HediffSet.DirtyCache() so every downstream event fires exactly as in game.
+    /// </summary>
+    static void ShootLegs(Pawn p, float targetLs)
+    {
+        List<BodyPartRecord> legs = Parts(p, BodyPartTagDefOf.MovingLimbCore);
+        float bestErr = float.MaxValue; int best = 0;
+        for (int d = 0; d < 30; d++)
+        {
+            var added = new List<Hediff>();
+            if (d > 0) foreach (var leg in legs) added.Add(AddHediff<Hediff_Injury>(p, MakeDef("Cut", typeof(Hediff_Injury)), leg, d, notify: false));
+            float ls = LoadSupportCalculator.Calculate(p).LoadSupport;
+            foreach (Hediff h in added) p.health.hediffSet.hediffs.Remove(h);
+            if (Math.Abs(ls - targetLs) < bestErr) { bestErr = Math.Abs(ls - targetLs); best = d; }
+        }
+        foreach (var leg in legs) Injure(p, leg, best);
+    }
+
+    // PawnsFinder leaf populations (a live World/caravans cannot be built outside Unity); the aggregator stays vanilla.
+    static readonly List<Pawn> StubMapsWorld = new List<Pawn>(), StubCaravans = new List<Pawn>();
+    static bool MapsWorldPopulation(ref List<Pawn> __result) { __result = StubMapsWorld; return false; }
+    static bool CaravanPopulation(ref List<Pawn> __result) { __result = StubCaravans; return false; }
+    // JobGiver_Steal map searches (need a Map); the count computation stays vanilla.
+    static Thing StealTarget;
+    static bool ExitSpotStub(ref IntVec3 spot, ref bool __result) { spot = IntVec3.Zero; __result = true; return false; }
+    static bool StealTargetStub(ref Thing item, ref bool __result) { item = StealTarget; __result = true; return false; }
+    static bool FalseResult(ref bool __result) { __result = false; return false; }
+    class ThrowingStatPart : StatPart
+    {
+        public static bool ThrowNext;
+        public override void TransformValue(StatRequest req, ref float val) { if (ThrowNext) { ThrowNext = false; throw new InvalidOperationException("third-party stat part exception"); } }
+        public override string ExplanationPart(StatRequest req) { return null; }
+    }
 
     static void PartOffset(Pawn p, BodyPartRecord part, float offset)
     {
@@ -415,7 +511,8 @@ static class IntegrationTests
         patched.Sort();
         foreach (string s in patched) Console.WriteLine("  patched: " + s);
         Check("Harmony ID is aRed.Parametric", ParametricMod.HarmonyId == "aRed.Parametric");
-        Check("exactly 3 methods patched by Parametric", patched.Count == 3);
+        Check("exactly 4 methods patched by Parametric", patched.Count == 4);
+        Check("Pawn.GetGizmos() patched (Overload gizmo)", patched.Exists(x => x.StartsWith("Verse.Pawn.GetGizmos(")));
         Check("MassUtility.Capacity(Pawn, StringBuilder) patched", patched.Exists(s => s.StartsWith("RimWorld.MassUtility.Capacity(Pawn, StringBuilder")));
         Check("HediffSet.DirtyCache() patched", patched.Exists(s => s.StartsWith("Verse.HediffSet.DirtyCache(")));
         Check("Pawn.GetInspectString() patched", patched.Exists(s => s.StartsWith("Verse.Pawn.GetInspectString(")));
@@ -918,6 +1015,564 @@ static class IntegrationTests
 
         Check("all third-party test patches removed; Parametric's still present", !Harmony.GetPatchInfo(massCap).Owners.Contains(ThirdPartyId) && Harmony.GetPatchInfo(massCap).Owners.Contains(ParametricMod.HarmonyId));
         Check("after all patterns: vanilla chain back to 35 x LS, guard depth 0", allEqual(B * L) && Patch_MassUtility_Capacity.Depth == 0);
+
+        // ================= OVERLOAD =================
+        Console.WriteLine("\n=== OVERLOAD: setup (real MassUtility / StatWorker / ThingOwner / Pawn_CarryTracker) ===");
+        ticks.SetValue(tm, 50000);
+        typeof(Game).GetField("uniqueIDsManager", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).SetValue(game, new UniqueIDsManager());
+        typeof(Game).GetField("maps", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).SetValue(game, new List<Map>()); // ThingOwner.NotifyAdded reads Find.Maps
+        massStat = new StatDef(); massStat.defName = "Mass"; massStat.label = "mass"; massStat.workerClass = typeof(StatWorker); massStat.minValue = 0f; massStat.immutable = false;
+        StatDefOf.Mass = massStat;
+        moveStat = new StatDef(); moveStat.defName = "MoveSpeed"; moveStat.label = "move speed"; moveStat.workerClass = typeof(StatWorker); moveStat.defaultBaseValue = 4.6f; moveStat.minValue = 0f;
+        StatDefOf.MoveSpeed = moveStat;
+        StatPart_Overload.InjectInto(moveStat); StatPart_Overload.InjectInto(moveStat);
+        Check("MoveSpeed: exactly one StatPart_Overload, idempotent", moveStat.parts.Count(x => x is StatPart_Overload) == 1);
+        var playerFactionDef = new FactionDef(); playerFactionDef.defName = "TestPlayerFaction"; playerFactionDef.isPlayer = true;
+        Faction playerFaction = New<Faction>(); playerFaction.def = playerFactionDef;
+        var olComp = new OverloadGameComponent(game);
+        Check("OverloadGameComponent.Instance is the live component", OverloadGameComponent.Instance == olComp);
+        var dropper = new TestDropper();
+        IOverloadDropper vanillaDropper = OverloadReconciler.Dropper;
+        OverloadReconciler.Dropper = dropper;
+        ParametricSettings S = ParametricMod.Settings;
+        Check("defaults: Overload on, player 100%, non-player 100%", S.overloadEnabled && S.overloadPlayerDefault == 1f && S.overloadNonPlayerDefault == 1f);
+        var gold = ItemDef("TestGold", 1f, 500);
+        var steel = ItemDef("TestSteel", 0.5f, 500);
+        const float C80 = 80f / 35f; // body size giving a comfortable capacity of 80 kg with Load Support 1.0
+        Func<Pawn, float> Move = x => x.GetStatValue(moveStat, true, -1);
+        Func<Pawn, float> MoveFactor = x => Move(x) / 4.6f;
+        Func<float, float, bool> NearKg = (a, b) => Math.Abs(a - b) <= 0.05f + 0.001f * Math.Abs(b);
+
+        // ---- 1/2/3/4: disabled, unconfigured, individual 25%, other pawn unchanged ----
+        Console.WriteLine("\n--- policy basics ---");
+        Pawn olA = Player(Human("OlA", C80), playerFaction); Pawn olB = Player(Human("OlB", C80), playerFaction);
+        Check("unconfigured player pawn at 100%: Capacity = comfortable = 80 kg (zero change)", NearKg(MassUtility.Capacity(olA, null), 80f) && NearKg(OverloadUtility.ComfortableCapacity(olA), 80f));
+        AddItem(olA, gold, 60);
+        Check("unconfigured pawn under comfortable load: MoveSpeed exactly unchanged (4.6)", Math.Abs(Move(olA) - 4.6f) < 1e-5f);
+        OverloadUtility.SetPolicy(olA, 0.25f);
+        float capA = MassUtility.Capacity(olA, null);
+        Console.WriteLine("  OlA policy 25%: comfortable " + OverloadUtility.ComfortableCapacity(olA).ToString("0.0") + " kg, exposed " + capA.ToString("0.0") + " kg, FreeSpace " + MassUtility.FreeSpace(olA).ToString("0.0"));
+        Check("individual 25%: exposed MassUtility.Capacity = comfortable x 1.75 = 140 kg", NearKg(capA, 140f));
+        Check("individual 25%: vanilla FreeSpace/encumbrance see the routine capacity (140 - 60 = 80 kg)", NearKg(MassUtility.FreeSpace(olA), 80f));
+        Check("another pawn is unchanged (80 kg)", NearKg(MassUtility.Capacity(olB, null), 80f));
+        Check("only one policy record stored (inheriting pawns store nothing)", olComp.PolicyRecordCount == 1);
+        S.overloadEnabled = false;
+        AddItem(olA, gold, 60); // 120 kg vs comfortable 80: would be x0.5 if enabled
+        Check("Overload disabled: Capacity = comfortable (80), MoveSpeed untouched at 120 kg, reconciliation skipped",
+            NearKg(MassUtility.Capacity(olA, null), 80f) && Math.Abs(Move(olA) - 4.6f) < 1e-5f && !OverloadReconciler.Reconcile(olA).Ran);
+        S.overloadEnabled = true;
+        Check("re-enabled: 120 kg / 80 kg -> x0.50 movement", Math.Abs(MoveFactor(olA) - 0.5f) < 1e-4f);
+        OverloadUtility.SetPolicy(olA, 1f);
+        Check("setting a pawn back to the player default removes its record", olComp.PolicyRecordCount == 0 && !OverloadUtility.HasIndividualPolicy(olA));
+        olComp.ProcessDue(int.MaxValue); dropper.Ground.Clear(); ClearInventory(olA);
+
+        // ---- 5: colony bulk application ----
+        Pawn guest = Human("OlGuest", C80); Pawn prisoner = Player(Human("OlPrisoner", C80), playerFaction);
+        prisoner.guest = new Pawn_GuestTracker(prisoner); prisoner.guest.guestStatusInt = GuestStatus.Prisoner;
+        int applied = OverloadUtility.ApplyToPawns(0.5f, new List<Pawn> { olA, olB, guest, prisoner });
+        Console.WriteLine("  apply 50% to [OlA, OlB, non-player guest, prisoner] -> " + applied + " pawns");
+        Check("colony apply: 2 player pawns set; non-player guest and prisoner skipped", applied == 2 && Math.Abs(OverloadUtility.PolicyFor(olA) - 0.5f) < 1e-6f
+              && Math.Abs(OverloadUtility.PolicyFor(olB) - 0.5f) < 1e-6f && OverloadUtility.PolicyFor(guest) == 1f && !OverloadUtility.HasIndividualPolicy(prisoner));
+        Check("gizmo eligibility: player pawn yes, non-player/prisoner no", OverloadUtility.CanUseGizmo(olA) && !OverloadUtility.CanUseGizmo(guest) && !OverloadUtility.CanUseGizmo(prisoner));
+
+        // ---- 6: save / reload persistence ----
+        string savePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "parametric_overload_test.xml");
+        OverloadUtility.SetPolicy(olB, 0.10f);
+        Scribe.saver.InitSaving(savePath, "savegame");
+        olComp.ExposeData();
+        Scribe.saver.FinalizeSaving();
+        var reloaded = new OverloadGameComponent(game);
+        Check("fresh component starts empty", reloaded.PolicyRecordCount == 0 && OverloadUtility.PolicyFor(olB) == 1f);
+        Scribe.loader.InitLoading(savePath);
+        reloaded.ExposeData();
+        Scribe.loader.FinalizeLoading();
+        Console.WriteLine("  saved and reloaded: " + reloaded.PolicyRecordCount + " records; OlA " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(olA)) + ", OlB " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(olB)));
+        Check("save/reload: individual policies survive (OlA 50%, OlB 10%)", OverloadGameComponent.Instance == reloaded && reloaded.PolicyRecordCount == 2
+              && Math.Abs(OverloadUtility.PolicyFor(olA) - 0.5f) < 1e-6f && Math.Abs(OverloadUtility.PolicyFor(olB) - 0.10f) < 1e-6f);
+        olComp = reloaded;
+        OverloadUtility.SetPolicy(olA, 1f); OverloadUtility.SetPolicy(olB, 1f);
+
+        // ---- 7-12: exactly once under PR #2 re-entrancy ----
+        Console.WriteLine("\n--- Load Support once + Overload once (PR #2 re-entrancy) ---");
+        Pawn olDuster = Player(Human("OlDuster"), playerFaction); olDuster.stackCount = 1; olDuster.Name = new NameSingle("OlDuster");
+        InstallAll(olDuster, BodyPartTagDefOf.MovingLimbCore, mod3Leg); InstallAll(olDuster, BodyPartTagDefOf.ManipulationLimbCore, mod3Arm);
+        Install(olDuster, Parts(olDuster, BodyPartTagDefOf.Spine)[0], mod3Spine); Install(olDuster, Parts(olDuster, BodyPartTagDefOf.Pelvis)[0], mod3Pelvis); PartOffset(olDuster, olDuster.RaceProps.body.corePart, 2f);
+        Pawn olPlain = Player(Human("OlPlain"), playerFaction); olPlain.stackCount = 1; olPlain.Name = new NameSingle("OlPlain"); // Load Support exactly 1
+        Pawn olMate = Player(Human("OlMate"), playerFaction); olMate.Name = new NameSingle("OlMate"); InstallAll(olMate, BodyPartTagDefOf.MovingLimbCore, bionicLeg);
+        float Ld = LoadSupportCache.GetResult(olDuster, true).LoadSupport, Lp = LoadSupportCache.GetResult(olPlain, true).LoadSupport, Lmate = LoadSupportCache.GetResult(olMate, true).LoadSupport;
+        OverloadUtility.SetPolicy(olDuster, 0.25f); OverloadUtility.SetPolicy(olPlain, 0.25f); OverloadUtility.SetPolicy(olMate, 0.5f);
+        Func<Pawn, float> caravanOf = x => CollectionsMassCalculator.Capacity(new List<ThingCount> { new ThingCount(x, 1) }, null);
+        Func<Pawn, float> caravanExplOf = x => CollectionsMassCalculator.Capacity(new List<ThingCount> { new ThingCount(x, 1) }, new System.Text.StringBuilder());
+        Action<string, Pawn, float, float> onceRow = (label, x, comfortableExp, exposedExp) =>
+        {
+            float capX = MassUtility.Capacity(x, null), comf = OverloadUtility.ComfortableCapacity(x), car = caravanOf(x), carE = caravanExplOf(x);
+            Console.WriteLine(string.Format("  {0,-58} comfortable {1,8:0.0} (exp {2,8:0.0})  exposed {3,8:0.0}  caravan {4,8:0.0}  +expl {5,8:0.0} (exp {6,8:0.0})",
+                label, comf, comfortableExp, capX, car, carE, exposedExp));
+            Check(label + ": comfortable = LS once, exposed = LS once x Overload once (Capacity, caravan, explanation path)",
+                Near(comf, comfortableExp, 0.001f) && Near(capX, exposedExp, 0.001f) && Near(car, exposedExp, 0.001f) && Near(carE, exposedExp, 0.001f));
+        };
+        onceRow("A  LS " + Ld.ToString("0.00") + " + Overload 25%", olDuster, 35f * Ld, 35f * Ld * 1.75f);
+        onceRow("B  LS exactly 1 + Overload 25%", olPlain, 35f, 35f * 1.75f);
+        S.applyToMassCapacity = false;
+        onceRow("C  LS mass integration OFF + Overload 25%", olDuster, 35f, 35f * 1.75f);
+        S.applyToMassCapacity = true;
+        OverloadUtility.SetPolicy(olDuster, 1f);
+        onceRow("D  LS active + Overload policy 100%", olDuster, 35f * Ld, 35f * Ld);
+        OverloadUtility.SetPolicy(olDuster, 0.25f);
+
+        // VEF-style recursive stat (PR #2 pattern): prefix, postfix before, postfix after
+        foreach (string pattern in new[] { "prefix", "postfix before", "postfix after" })
+        {
+            if (pattern == "prefix") third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+            else if (pattern == "postfix before") third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPostfix", BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.High });
+            else third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPostfix", BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.Last, after = new[] { ParametricMod.HarmonyId } });
+            onceRow("10 VEF-style stat (" + pattern + "), LS " + Ld.ToString("0.00") + ", 25%", olDuster, 35f * Ld * 1.04f, 35f * Ld * 1.04f * 1.75f);
+            onceRow("9  VEF-style stat (" + pattern + "), LS exactly 1, 25%", olPlain, 35f * 1.04f, 35f * 1.04f * 1.75f);
+            Check("10 info-card path (stat computed outside Capacity) = exposed value, once each (" + pattern + ")", Near(FakeMassStat(olDuster), 35f * Ld * 1.04f * 1.75f, 0.001f));
+            third.UnpatchAll(ThirdPartyId);
+        }
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+        Patch_MassUtility_Capacity.NestingGuardEnabled = false;
+        float noGuard = MassUtility.Capacity(olPlain, null);
+        Patch_MassUtility_Capacity.NestingGuardEnabled = true;
+        Console.WriteLine("  guard OFF (pre-fix reproduction), LS exactly 1: " + noGuard.ToString("0.0") + " kg = 35 x 1.04 x 1.75 x 1.75");
+        Check("9  without the guard Overload would double even at LS exactly 1 (x1.75^2); with it, once", Near(noGuard, 35f * 1.04f * 1.75f * 1.75f, 0.001f) && Near(MassUtility.Capacity(olPlain, null), 35f * 1.04f * 1.75f, 0.001f));
+        var olTraced = new List<string>(); int olMark = logLines.Count;
+        MassCapacityTrace.Sink = olTraced.Add; MassCapacityTrace.Arm(olPlain); MassUtility.Capacity(olPlain, null); MassCapacityTrace.Disarm("test"); MassCapacityTrace.Sink = null;
+        string olTrace = string.Join("\n", olTraced.ToArray());
+        Check("trace shows inner call 'Overload: Applied' and outer 'Overload: AlreadyAppliedInside'", olTrace.Contains("Overload: Applied (x1.75") && olTrace.Contains("Overload: AlreadyAppliedInside"));
+        logLines.RemoveRange(olMark, logLines.Count - olMark);
+        third.UnpatchAll(ThirdPartyId);
+
+        // 11: different-pawn nested call keeps its own transforms
+        CrossPawnPartner = olMate; CrossPawnOwner = olDuster;
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyCrossPawnPostfix", BindingFlags.Static | BindingFlags.NonPublic)));
+        float cross = MassUtility.Capacity(olDuster, null), crossExp = (35f + 35f * Lmate * 1.5f) * Ld * 1.75f;
+        Console.WriteLine("  11 nested call for another pawn: " + cross.ToString("0.0") + " kg (exp (35 + 35 x LSmate x 1.5) x LS x 1.75 = " + crossExp.ToString("0.0") + ")");
+        Check("11 different-pawn nested call: partner gets its own LS and its own 50% overload", Near(cross, crossExp, 0.001f));
+        third.UnpatchAll(ThirdPartyId); CrossPawnPartner = CrossPawnOwner = null;
+
+        // 12: exception unwind
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyThrowingPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+        ThrowNext = true; bool olThrew = false;
+        try { OverloadUtility.ComfortableCapacity(olDuster); } catch (Exception) { olThrew = true; }
+        third.UnpatchAll(ThirdPartyId);
+        Check("12 exception inside the comfortable query: propagates, guard depth 0, comfortable marker cleared, next values correct",
+            olThrew && Patch_MassUtility_Capacity.Depth == 0 && OverloadUtility.ComfortableQueryPawn == null
+            && Near(MassUtility.Capacity(olDuster, null), 35f * Ld * 1.75f, 0.001f) && Near(OverloadUtility.ComfortableCapacity(olDuster), 35f * Ld, 0.001f));
+
+        // ---- 13: reactive movement ----
+        Console.WriteLine("\n--- reactive movement (comfortable 80 kg; mass = real inventory) ---");
+        Pawn mover = Player(Human("OlMover", C80), playerFaction);
+        OverloadUtility.SetPolicy(mover, 0.10f);
+        bool reactiveOk = true;
+        foreach (int kg in new[] { 80, 88, 100, 112, 120, 140 })
+        {
+            ClearInventory(mover); AddItem(mover, gold, kg);
+            float f = MoveFactor(mover), exp = OverloadFormula.ReactiveFactor(kg, 80f);
+            Console.WriteLine(string.Format("  {0,4} kg -> MoveSpeed {1:0.000} (x{2:0.00}, expected x{3:0.00})  {4}", kg, Move(mover), f, exp, OverloadExplanation(mover) != null ? "[stat explanation: " + OverloadExplanation(mover) + "]" : "[no explanation line]"));
+            reactiveOk &= Math.Abs(f - exp) < 1e-3f;
+        }
+        Check("reactive: 80/88/100/112/120/140 kg -> x1.00/0.90/0.75/0.60/0.50/0.25 through the real StatWorker", reactiveOk);
+        ClearInventory(mover); AddItem(mover, gold, 120);
+        float before20 = MoveFactor(mover);
+        Thing some = mover.inventory.innerContainer[0]; mover.inventory.innerContainer.Take(some, 20);
+        Check("dropping 20 kg (120 -> 100) immediately changes x0.50 -> x0.75 (same tick, no polling)", Math.Abs(before20 - 0.5f) < 1e-3f && Math.Abs(MoveFactor(mover) - 0.75f) < 1e-3f);
+        string explLine = OverloadExplanation(mover);
+        ClearInventory(mover); AddItem(mover, gold, 40);
+        string explCalm = OverloadExplanation(mover);
+        Check("stat explanation: overload line only when overloaded (none at or below comfortable)", explLine != null && explLine.Contains("Overload_MoveSpeedExplanation") && explCalm == null);
+        Check("denominator is comfortable, never routine: 112 kg with 25% policy (routine 140) -> x0.60, not x1.00",
+            RunWith(() => { OverloadUtility.SetPolicy(mover, 0.25f); ClearInventory(mover); AddItem(mover, gold, 112); return Math.Abs(MoveFactor(mover) - 0.6f) < 1e-3f; }));
+
+        // ---- gold at the edge of the map ----
+        Console.WriteLine("\n--- gold at the edge of the map ---");
+        OverloadUtility.SetPolicy(mover, 0.75f); ClearInventory(mover); AddItem(mover, gold, 99);
+        float free75 = MassUtility.FreeSpace(mover);
+        OverloadUtility.SetPolicy(mover, 0.10f);
+        float free10 = MassUtility.FreeSpace(mover);
+        float factorAfterSwitch = MoveFactor(mover);
+        AddItem(mover, gold, 5);
+        Console.WriteLine("  75%: routine 100, free " + free75.ToString("0.0") + " kg -> 10%: routine 152, free " + free10.ToString("0.0") + " kg; after +5 kg: factor x" + MoveFactor(mover).ToString("0.00"));
+        Check("gold edge: 75% -> 10% raises free space 1 -> 53 kg for ordinary loading", NearKg(free75, 1f) && NearKg(free10, 53f));
+        Check("gold edge: switching the policy does not change movement (x" + factorAfterSwitch.ToString("0.00") + ", from actual 99 kg)", Math.Abs(factorAfterSwitch - OverloadFormula.ReactiveFactor(99f, 80f)) < 1e-3f);
+        Check("gold edge: 104 kg -> 130% -> x0.70 (not x0.10)", Math.Abs(MoveFactor(mover) - 0.7f) < 1e-3f);
+
+        // ---- 14: policy tightening schedules a spill ----
+        Console.WriteLine("\n--- policy tightening ---");
+        ClearInventory(mover); dropper.Ground.Clear(); AddItem(mover, gold, 130);
+        int runsBefore = olComp.ReconciliationsRun;
+        OverloadUtility.SetPolicy(mover, 0.75f);
+        Check("10% -> 75% with 130 kg: one reconciliation queued immediately", olComp.IsQueued(mover) && olComp.PendingCount == 1);
+        olComp.ProcessDue(OverloadUtility.CurrentTick());
+        Console.WriteLine("  after reconciliation: mass " + OverloadUtility.ActualSupportedMass(mover).ToString("0.0") + " kg, dropped " + GroundMass().ToString("0.0") + " kg");
+        Check("policy tightening: 30 kg of cargo spilled, 100 kg kept (exactly the new routine limit)", olComp.ReconciliationsRun == runsBefore + 1
+              && NearKg(OverloadUtility.ActualSupportedMass(mover), 100f) && NearKg(GroundMass(), 30f));
+        OverloadUtility.SetPolicy(mover, 0.25f);
+        Check("loosening the policy never queues a spill", !olComp.IsQueued(mover));
+
+        // ---- 15: burst of dirty events coalesces ----
+        Console.WriteLine("\n--- burst of HediffSet.DirtyCache events ---");
+        Pawn burst = Player(Human("OlBurst", C80), playerFaction); OverloadUtility.SetPolicy(burst, 0.25f); AddItem(burst, gold, 135);
+        runsBefore = olComp.ReconciliationsRun; dropper.Ground.Clear();
+        for (int i = 0; i < 4; i++) Injure(burst, Parts(burst, BodyPartTagDefOf.MovingLimbCore)[i % 2], 3f); // 4 real DirtyCache() calls
+        Check("4 DirtyCache events -> 1 queued entry", olComp.PendingCount == 1 && olComp.IsQueued(burst));
+        olComp.ProcessDue(OverloadUtility.CurrentTick() + OverloadGameComponent.CoalesceDelayTicks - 1);
+        Check("not processed before the coalescing window ends", olComp.ReconciliationsRun == runsBefore && olComp.IsQueued(burst));
+        olComp.GameComponentTick(); ticks.SetValue(tm, (int)ticks.GetValue(tm) + OverloadGameComponent.CoalesceDelayTicks); olComp.GameComponentTick();
+        Console.WriteLine("  burst: " + (olComp.ReconciliationsRun - runsBefore) + " reconciliation(s), comfortable now " + OverloadUtility.ComfortableCapacity(burst).ToString("0.0") + " kg, dropped " + GroundMass().ToString("0.0") + " kg");
+        Check("burst -> exactly one reconciliation via GameComponentTick after the window", olComp.ReconciliationsRun == runsBefore + 1 && olComp.PendingCount == 0);
+        Check("that one reconciliation brought the pawn to its new routine limit (within one 1 kg unit, never above)",
+            OverloadUtility.ActualSupportedMass(burst) <= OverloadUtility.RoutineCapacity(burst) + 1e-3f && OverloadUtility.RoutineCapacity(burst) - OverloadUtility.ActualSupportedMass(burst) < 1f);
+        Check("GameComponentTick with an empty queue does nothing", RunWith(() => { int r0 = olComp.ReconciliationsRun; olComp.GameComponentTick(); return olComp.ReconciliationsRun == r0; }));
+
+        // ---- 16: partial stack ----
+        Console.WriteLine("\n--- partial stack spill ---");
+        Pawn splitter = Player(Human("OlSplit", C80), playerFaction); OverloadUtility.SetPolicy(splitter, 1f);
+        AddItem(splitter, gold, 75); AddItem(splitter, steel, 40); // 75 + 20 = 95 kg vs routine 80
+        dropper.Ground.Clear();
+        OverloadReconcileReport rs = OverloadReconciler.Reconcile(splitter);
+        Thing goldLeft = FindItem(splitter, gold), steelLeft = FindItem(splitter, steel);
+        Console.WriteLine("  " + OverloadReconciler.Describe(splitter, rs));
+        Check("partial stack: exactly 15 of 75 gold dropped (largest stack mass first), 60 kept, steel untouched",
+            goldLeft != null && goldLeft.stackCount == 60 && steelLeft != null && steelLeft.stackCount == 40 && dropper.Ground.Count == 1 && dropper.Ground[0].stackCount == 15 && dropper.Ground[0].def == gold);
+        Check("partial stack: the dropped 15 is a real split (new Thing, new ID), nothing duplicated or destroyed",
+            dropper.Ground[0] != goldLeft && dropper.Ground[0].thingIDNumber != goldLeft.thingIDNumber && goldLeft.stackCount + dropper.Ground[0].stackCount == 75);
+        dropper.FailPlacement = true; AddItem(splitter, gold, 30); dropper.Ground.Clear();
+        OverloadReconcileReport rf = OverloadReconciler.Reconcile(splitter);
+        dropper.FailPlacement = false;
+        Check("placement failure: nothing deleted, cargo kept, pawn left overloaded, reported", rf.PlacementFailed && rf.StillOverRoutine && FindItem(splitter, gold).stackCount == 90 && dropper.Ground.Count == 0);
+
+        // ---- 17: carry tracker ----
+        Console.WriteLine("\n--- hand-carried stack (Pawn_CarryTracker) ---");
+        Pawn hauler = Player(Human("OlHauler", C80), playerFaction);
+        float massEmpty = OverloadUtility.ActualSupportedMass(hauler);
+        hauler.carryTracker.innerContainer.TryAdd(MakeItem(gold, 60), true);
+        Check("vanilla mass accounting excludes the hand-carried stack (GearAndInventoryMass unchanged), so it is not counted twice",
+            hauler.carryTracker.CarriedThing != null && OverloadUtility.ActualSupportedMass(hauler) == massEmpty && MassUtility.GearAndInventoryMass(hauler) == massEmpty);
+        Check("hand-carrying 60 kg does not slow a pawn with 80 kg comfortable capacity (hand carry is governed by CarryingCapacity)", Math.Abs(MoveFactor(hauler) - 1f) < 1e-6f);
+        int limitHealthy = hauler.carryTracker.MaxStackSpaceEver(gold);
+        foreach (var a in Parts(hauler, BodyPartTagDefOf.ManipulationLimbCore)) RemovePart(hauler, a); // both arms lost: CarryingCapacity -> 0
+        dropper.Ground.Clear();
+        OverloadReconcileReport rc = OverloadReconciler.Reconcile(hauler);
+        Console.WriteLine("  carrying 60 gold, limit " + limitHealthy + " -> arms lost, limit " + rc.CarriedLimit + ": dropped " + rc.CarriedUnitsDropped + " units");
+        Check("hand-carry: when the vanilla carry limit falls below the carried stack, the excess spills (here all 60)", rc.CarriedUnitsDropped == 60 && hauler.carryTracker.CarriedThing == null && GroundCount(gold) == 60);
+
+        // ---- 18/19: armor-only and severe equipment overload ----
+        Console.WriteLine("\n--- unavoidable equipment ---");
+        Pawn knight = Player(Human("OlKnight", 50f / 35f), playerFaction); OverloadUtility.SetPolicy(knight, 0.25f);
+        Wear(knight, 90f);
+        dropper.Ground.Clear();
+        OverloadReconcileReport ra = OverloadReconciler.Reconcile(knight);
+        Console.WriteLine("  armor 90 kg, comfortable " + ra.Comfortable.ToString("0.0") + " kg, routine " + ra.Routine.ToString("0.0") + " kg: factor x" + MoveFactor(knight).ToString("0.00") + ", dropped " + dropper.Ground.Count);
+        Check("armor-only: inventory empty, apparel exceeds routine limit -> nothing stripped, still overloaded, x0.20", dropper.Ground.Count == 0 && ra.StillOverRoutine
+              && knight.apparel.WornApparel.Count == 1 && Math.Abs(MoveFactor(knight) - 0.2f) < 1e-3f);
+        Pawn crusher = Player(Human("OlCrusher", 50f / 35f), playerFaction); Wear(crusher, 130f);
+        float crushF = MoveFactor(crusher);
+        float tpm = crusher.TicksPerMoveCardinal;
+        Console.WriteLine("  armor 130 kg on comfortable 50 kg (260%): raw x" + OverloadFormula.RawFactor(130f, 50f).ToString("0.00") + ", applied x" + crushF.ToString("0.00")
+                          + ", MoveSpeed " + Move(crusher).ToString("0.000") + " c/s, vanilla TicksPerMoveCardinal " + tpm);
+        Check("severe: >=200% -> emergency floor x0.05, MoveSpeed finite and > 0, vanilla ticks/cell finite and clamped (<= 450), not Downed",
+            Math.Abs(crushF - OverloadFormula.EmergencyMinimumFactor) < 1e-6f && Move(crusher) > 0f && tpm > 0 && tpm <= 450 && !crusher.Downed);
+
+        // ---- 20 + 34: hostile NPC raid scenarios (global non-player policy) ----
+        Console.WriteLine("\n--- RAID: thief with inventory loot (non-player policy 25%) ---");
+        S.overloadNonPlayerDefault = 0.25f;
+        Pawn raider = Human("OlRaider", C80); // no player faction
+        AddItem(raider, gold, 135);
+        Console.WriteLine("  RAIDER HEALTHY   comfortable " + OverloadUtility.ComfortableCapacity(raider).ToString("0.0") + " kg, policy " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(raider))
+                          + ", routine max " + OverloadUtility.RoutineCapacity(raider).ToString("0.0") + " kg, actual " + OverloadUtility.ActualSupportedMass(raider).ToString("0.0") + " kg, movement x" + MoveFactor(raider).ToString("0.00"));
+        Check("raider healthy: 80 comfortable, 140 routine, 135 kg carried, movement ~x0.31", NearKg(OverloadUtility.ComfortableCapacity(raider), 80f) && NearKg(OverloadUtility.RoutineCapacity(raider), 140f)
+              && Math.Abs(MoveFactor(raider) - 0.3125f) < 1e-3f);
+        olComp.ProcessDue(int.MaxValue); dropper.Ground.Clear(); runsBefore = olComp.ReconciliationsRun;
+        ShootLegs(raider, 0.75f); // real leg injuries (real DirtyCache): Load Support -> ~0.75
+        bool raiderQueued = olComp.IsQueued(raider) && olComp.PendingCount == 1;
+        float raiderComfortable = OverloadUtility.ComfortableCapacity(raider), raiderRoutine = OverloadUtility.RoutineCapacity(raider);
+        Console.WriteLine("  RAIDER SHOT IN LEGS  new comfortable " + OverloadUtility.ComfortableCapacity(raider).ToString("0.0") + " kg, new routine max " + OverloadUtility.RoutineCapacity(raider).ToString("0.0")
+                          + " kg, current " + OverloadUtility.ActualSupportedMass(raider).ToString("0.0") + " kg, excess " + (OverloadUtility.ActualSupportedMass(raider) - OverloadUtility.RoutineCapacity(raider)).ToString("0.0") + " kg; queued " + olComp.IsQueued(raider));
+        ticks.SetValue(tm, (int)ticks.GetValue(tm) + OverloadGameComponent.CoalesceDelayTicks); olComp.GameComponentTick();
+        Console.WriteLine("  AFTER SPILL      dropped " + GroundMass().ToString("0.0") + " kg, actual " + OverloadUtility.ActualSupportedMass(raider).ToString("0.0") + " kg, movement x" + MoveFactor(raider).ToString("0.00"));
+        Check("raider: the injury events queued exactly one reconciliation, which ran", raiderQueued && olComp.ReconciliationsRun == runsBefore + 1 && !olComp.IsQueued(raider));
+        Check("raider: comfortable 80 -> ~60 (" + raiderComfortable.ToString("0.0") + "), routine = comfortable x 1.75 (" + raiderRoutine.ToString("0.0") + ")",
+            Math.Abs(raiderComfortable - 60f) <= 3f && Near(raiderRoutine, raiderComfortable * 1.75f, 0.001f));
+        Check("raider: spilled = 135 - new routine limit (" + GroundMass().ToString("0.0") + " kg), kept = routine limit, movement back to ~x0.25 (policy floor, whole units)",
+            Math.Abs(GroundMass() - (135f - raiderRoutine)) <= 1.001f && OverloadUtility.ActualSupportedMass(raider) <= raiderRoutine + 1e-3f
+            && raiderRoutine - OverloadUtility.ActualSupportedMass(raider) < 1f && MoveFactor(raider) >= 0.25f - 1e-4f && MoveFactor(raider) <= 0.25f + 1f / raiderComfortable + 1e-4f);
+
+        Console.WriteLine("\n--- HEAVY RAIDER: armor + weapon 90 kg, loot 50 kg ---");
+        Pawn heavy = Human("OlHeavy", 100f / 35f); Wear(heavy, 90f); AddItem(heavy, gold, 50);
+        Console.WriteLine("  healthy: comfortable " + OverloadUtility.ComfortableCapacity(heavy).ToString("0.0") + " kg, routine " + OverloadUtility.RoutineCapacity(heavy).ToString("0.0") + " kg, actual "
+                          + OverloadUtility.ActualSupportedMass(heavy).ToString("0.0") + " kg, movement x" + MoveFactor(heavy).ToString("0.00"));
+        olComp.ProcessDue(int.MaxValue); dropper.Ground.Clear();
+        ShootLegs(heavy, 0.5f);
+        ticks.SetValue(tm, (int)ticks.GetValue(tm) + OverloadGameComponent.CoalesceDelayTicks); olComp.GameComponentTick();
+        Console.WriteLine("  shot: comfortable " + OverloadUtility.ComfortableCapacity(heavy).ToString("0.0") + " kg, routine " + OverloadUtility.RoutineCapacity(heavy).ToString("0.0") + " kg, loot dropped "
+                          + GroundMass().ToString("0.0") + " kg, inventory " + MassUtility.InventoryMass(heavy).ToString("0.0") + " kg, gear " + MassUtility.GearMass(heavy).ToString("0.0") + " kg, ratio "
+                          + OverloadFormula.LoadRatio(OverloadUtility.ActualSupportedMass(heavy), OverloadUtility.ComfortableCapacity(heavy)).ToString("0%") + ", movement x" + MoveFactor(heavy).ToString("0.00") + ", downed " + heavy.Downed);
+        float heavyC = OverloadUtility.ComfortableCapacity(heavy);
+        Check("heavy raider: comfortable 100 -> ~50 (" + heavyC.ToString("0.0") + "), all 50 kg loot spilled, armor kept (not stripped), not Downed",
+            Math.Abs(heavyC - 50f) <= 4f && NearKg(GroundMass(), 50f) && heavy.apparel.WornApparel.Count == 1 && MassUtility.InventoryMass(heavy) == 0f && !heavy.Downed);
+        Check("heavy raider: movement follows unavoidable 90 kg / comfortable (~180% -> ~x0.20), below the 25% policy, no capacity cheating",
+            Math.Abs(MoveFactor(heavy) - OverloadFormula.ReactiveFactor(90f, heavyC)) < 1e-3f && MoveFactor(heavy) < 0.25f && MoveFactor(heavy) > 0.1f
+            && Near(OverloadUtility.RoutineCapacity(heavy), heavyC * 1.75f, 0.001f));
+
+        // ================= PR #3 blocker 1: policy of a pawn away in a caravan must survive save pruning =================
+        Console.WriteLine("\n=== Persistence: policy of a caravan / travelling pawn survives pruning ===");
+        // The real PawnsFinder.All_AliveOrDead aggregator runs; only its two leaf providers (which need a live World /
+        // WorldObjectsHolder / caravans / gravship, not constructible outside Unity) are stubbed with test populations.
+        var pruneHarmony = new Harmony("parametric.tests.prune");
+        pruneHarmony.Patch(AccessTools.PropertyGetter(typeof(PawnsFinder), "AllMapsWorldAndTemporary_AliveOrDead"), Stub("MapsWorldPopulation"));
+        pruneHarmony.Patch(AccessTools.PropertyGetter(typeof(PawnsFinder), "AllCaravansAndTravellingTransporters_AliveOrDead"), Stub("CaravanPopulation"));
+        Pawn onMap = Player(Human("PrMap", C80), playerFaction), inCaravan = Player(Human("PrCaravan", C80), playerFaction), gone = Player(Human("PrGone", C80), playerFaction);
+        StubMapsWorld.Clear(); StubMapsWorld.Add(onMap); StubCaravans.Clear(); StubCaravans.Add(inCaravan);
+        Check("vanilla All_AliveOrDead = maps/world/temporary + caravans/transporters (real aggregator)", PawnsFinder.All_AliveOrDead.Contains(onMap) && PawnsFinder.All_AliveOrDead.Contains(inCaravan)
+              && !PawnsFinder.All_AliveOrDead.Contains(gone) && !PawnsFinder.AllMapsWorldAndTemporary_AliveOrDead.Contains(inCaravan));
+        // The bug, reproduced with the collection the first PR #3 revision used:
+        var oldComp = new OverloadGameComponent(game);
+        oldComp.SetPolicy(onMap, 0.5f, 1f); oldComp.SetPolicy(inCaravan, 0.25f, 1f); oldComp.SetPolicy(gone, 0.10f, 1f);
+        int removedOld = oldComp.PruneStaleAgainst(PawnsFinder.AllMapsWorldAndTemporary_AliveOrDead);
+        float oldCaravan; bool oldKept = oldComp.TryGetPolicy(inCaravan, out oldCaravan);
+        Console.WriteLine("  first revision (AllMapsWorldAndTemporary_AliveOrDead): pruned " + removedOld + " record(s), caravan pawn's policy kept: " + oldKept);
+        Check("REPRODUCED: pruning against AllMapsWorldAndTemporary_AliveOrDead deletes the caravan pawn's 25% policy", removedOld == 2 && !oldKept);
+        OverloadGameComponent.Instance = olComp;
+        // The fix, through the real save path (ExposeData Saving -> PruneStale -> All_AliveOrDead) and a reload:
+        OverloadUtility.SetPolicy(onMap, 0.5f); OverloadUtility.SetPolicy(inCaravan, 0.25f); OverloadUtility.SetPolicy(gone, 0.10f);
+        int recordsBefore = olComp.PolicyRecordCount;
+        string prunePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "parametric_overload_prune_test.xml");
+        Scribe.saver.InitSaving(prunePath, "savegame"); olComp.ExposeData(); Scribe.saver.FinalizeSaving();
+        bool caravanKeptAtSave = olComp.TryGetPolicy(inCaravan, out oldCaravan) && Math.Abs(oldCaravan - 0.25f) < 1e-6f;
+        bool goneRemoved = !olComp.TryGetPolicy(gone, out oldCaravan);
+        var reloadedComp = new OverloadGameComponent(game);
+        Scribe.loader.InitLoading(prunePath); reloadedComp.ExposeData(); Scribe.loader.FinalizeLoading();
+        Console.WriteLine("  fixed save: records " + recordsBefore + " -> " + olComp.PolicyRecordCount + "; after reload: caravan pawn " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(inCaravan))
+                          + ", map pawn " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(onMap)) + ", vanished pawn " + OverloadFormula.PolicyLabel(OverloadUtility.PolicyFor(gone)));
+        Check("save with the pawn in a caravan: its 25% record survives pruning", caravanKeptAtSave);
+        Check("stale-record cleanup still works: a pawn that exists nowhere loses its record", goneRemoved);
+        Check("after reload PolicyFor(caravan pawn) is still 25% (map pawn 50%)", OverloadGameComponent.Instance == reloadedComp
+              && Math.Abs(OverloadUtility.PolicyFor(inCaravan) - 0.25f) < 1e-6f && Math.Abs(OverloadUtility.PolicyFor(onMap) - 0.5f) < 1e-6f && OverloadUtility.PolicyFor(gone) == 1f);
+        pruneHarmony.UnpatchAll("parametric.tests.prune");
+        olComp = reloadedComp;
+        Check("prune with no known population never deletes (no world)", olComp.PruneStaleAgainst(new List<Pawn>()) == 0 && olComp.PolicyRecordCount == 2);
+
+        // ================= PR #3 blocker 2: hand carry is Overload's second channel =================
+        Console.WriteLine("\n=== Hand-carry channel: CarryingCapacity x routine multiplier (StatPart_OverloadHandCarry) ===");
+        StatPart_OverloadHandCarry.InjectInto(carryStat); StatPart_OverloadHandCarry.InjectInto(carryStat);
+        int lsIndex = carryStat.parts.FindIndex(x => x is StatPart_LoadSupport), handIndex = carryStat.parts.FindIndex(x => x is StatPart_OverloadHandCarry);
+        Check("CarryingCapacity: one StatPart_OverloadHandCarry, idempotent, AFTER StatPart_LoadSupport", carryStat.parts.Count(x => x is StatPart_OverloadHandCarry) == 1 && handIndex > lsIndex && lsIndex >= 0);
+        var silver = ItemDef("TestSilver", 0.2f, 500);            // Mass 0.2 kg per unit, VolumePerUnit 1: proves units, not kg
+        var dust = ItemDef("TestDust", 0.01f, 5000); dust.smallVolume = true; // VolumePerUnit 0.1
+        const float H80 = 80f / 75f; // body size giving comfortable CarryingCapacity 80 (75 x BodySize, Load Support 1)
+        Func<Pawn, float> Carry80 = x => x.GetStatValue(carryStat, true, -1);
+        Action<Pawn, ThingDef, int> Hold = (x, d, n) => { if (x.carryTracker.CarriedThing != null) x.carryTracker.innerContainer.ClearAndDestroyContents(); if (n > 0) x.carryTracker.innerContainer.TryAdd(MakeItem(d, n), true); };
+
+        Pawn handP = Player(Human("HandP", H80), playerFaction);
+        bool mapOk = true;
+        foreach (float pol in OverloadFormula.Presets)
+        {
+            OverloadUtility.SetPolicy(handP, pol);
+            float exposed = Carry80(handP), comf = OverloadUtility.ComfortableHandCapacity(handP);
+            Console.WriteLine(string.Format("  policy {0,4}: comfortable {1,6:0.00}  exposed CarryingCapacity {2,6:0.00}  (x{3:0.00})", OverloadFormula.PolicyLabel(pol), comf, exposed, exposed / comf));
+            mapOk &= Math.Abs(comf - 80f) < 0.01f && Math.Abs(exposed - 80f * OverloadFormula.RoutineMultiplier(pol)) < 0.02f;
+        }
+        Check("hand capacity: 100/75/50/25/10% -> 80/100/120/140/152 (comfortable stays 80, x1.00..x1.90 once)", mapOk);
+        OverloadUtility.SetPolicy(handP, 1f);
+        Check("100% policy: exposed CarryingCapacity = comfortable = vanilla-composed value (no part explanation)", Math.Abs(Carry80(handP) - 80f) < 0.01f
+              && carryStat.parts[handIndex].ExplanationPart(StatRequest.For(handP)) == null);
+
+        Console.WriteLine("  Load Support + hand overload (exactly once; comfortable keeps Load Support):");
+        Action<string, Pawn, float> handOnce = (label, x, expComf) =>
+        {
+            float comf = OverloadUtility.ComfortableHandCapacity(x), exposed = Carry80(x), mult = OverloadFormula.RoutineMultiplier(OverloadUtility.PolicyFor(x));
+            S.overloadEnabled = false; float off = Carry80(x); S.overloadEnabled = true;
+            Console.WriteLine(string.Format("    {0,-40} comfortable {1,8:0.0} (exp {2,8:0.0}, Overload off {3,8:0.0})  exposed {4,8:0.0} = x{5:0.00}", label, comf, expComf, off, exposed, exposed / comf));
+            Check("hand " + label + ": comfortable = expected (LS kept, Overload excluded), exposed = comfortable x routine multiplier exactly once",
+                Near(comf, expComf, 0.001f) && Near(comf, off, 0.0001f) && Near(exposed, comf * mult, 0.0001f));
+        };
+        S.overloadEnabled = false; float carryDusterNoOl = Carry80(olDuster); S.overloadEnabled = true;
+        OverloadUtility.SetPolicy(olDuster, 0.25f); OverloadUtility.SetPolicy(olPlain, 0.25f);
+        handOnce("A LS " + Ld.ToString("0.00") + " + 25%", olDuster, carryDusterNoOl);
+        Check("hand A: comfortable contains Load Support (differs from the Parametric-bypassed vanilla value)", !Near(OverloadUtility.ComfortableHandCapacity(olDuster), CarryVanilla(olDuster), 0.01f));
+        handOnce("B LS exactly 1 + 25%", olPlain, 75f);
+        S.loadSupportEnabled = false; handOnce("C Load Support disabled + 25%", olDuster, CarryVanilla(olDuster)); S.loadSupportEnabled = true;
+        OverloadUtility.SetPolicy(olDuster, 1f); handOnce("D LS active + 100%", olDuster, carryDusterNoOl); OverloadUtility.SetPolicy(olDuster, 0.25f);
+        var thrower = new ThrowingStatPart { parentStat = carryStat };
+        carryStat.parts.Insert(handIndex, thrower); ThrowingStatPart.ThrowNext = true; bool handThrew = false;
+        try { OverloadUtility.ComfortableHandCapacity(olPlain); } catch (Exception) { handThrew = true; }
+        carryStat.parts.Remove(thrower);
+        Check("F exception inside the comfortable hand query: propagates, marker restored, next values correct",
+            handThrew && OverloadUtility.ComfortableHandQueryPawn == null && Near(OverloadUtility.ComfortableHandCapacity(olPlain), 75f, 0.001f) && Near(Carry80(olPlain), 75f * 1.75f, 0.001f));
+
+        Console.WriteLine("\n--- vanilla thief: the REAL JobGiver_Steal.TryGiveJob (map searches stubbed, count formula vanilla) ---");
+        var stealHarmony = new Harmony("parametric.tests.steal");
+        stealHarmony.Patch(AccessTools.Method(typeof(RCellFinder), "TryFindBestExitSpot"), Stub("ExitSpotStub"));
+        stealHarmony.Patch(AccessTools.Method(typeof(StealAIUtility), "TryFindBestItemToSteal"), Stub("StealTargetStub"));
+        stealHarmony.Patch(AccessTools.Method(typeof(Verse.AI.GenAI), "InDangerousCombat"), Stub("FalseResult"));
+        MethodInfo stealGive = AccessTools.Method(typeof(JobGiver_Steal), "TryGiveJob");
+        Pawn thiefV = Human("ThiefV", H80);
+        StealTarget = MakeItem(silver, 500);
+        Func<int> stealCount = () => { var job = (Verse.AI.Job)stealGive.Invoke(new JobGiver_Steal(), new object[] { thiefV }); return job != null ? job.count : -1; };
+        S.overloadNonPlayerDefault = 1f; int count100 = stealCount();
+        S.overloadNonPlayerDefault = 0.25f; int count25 = stealCount();
+        Console.WriteLine("  thief comfortable CarryingCapacity 80, silver (0.2 kg, VolumePerUnit 1) stack 500: steal count at 100% = " + count100 + ", at 25% = " + count25);
+        Check("vanilla steal count: 100% policy -> 80 units (vanilla (int)(CarryingCapacity / VolumePerUnit))", count100 == 80);
+        Check("vanilla steal count: 25% NPC policy -> 140 units, through CarryingCapacity alone", count25 == 140);
+        Patches stealPatches = Harmony.GetPatchInfo(stealGive);
+        Check("no Parametric patch on JobGiver_Steal (or anything thief-specific)", stealPatches == null || !stealPatches.Owners.Contains(ParametricMod.HarmonyId));
+        stealHarmony.UnpatchAll("parametric.tests.steal");
+
+        Console.WriteLine("\n--- hand-carry reactive movement (comfortable hand 80, policy 10%) ---");
+        Pawn handMover = Player(Human("HandMover", H80), playerFaction); OverloadUtility.SetPolicy(handMover, 0.10f);
+        bool handReactive = true;
+        foreach (int units in new[] { 80, 88, 100, 112, 120, 140, 152 })
+        {
+            Hold(handMover, silver, units);
+            float f = MoveFactor(handMover), exp = OverloadFormula.ReactiveFactor(units, 80f);
+            Console.WriteLine(string.Format("  {0,4} silver ({1,5:0.0} kg, load {2,5:0.0}) -> x{3:0.00} (expected x{4:0.00})  {5}", units, units * 0.2f, OverloadUtility.ActualHandLoad(handMover), f, exp, OverloadExplanation(handMover) ?? "-"));
+            handReactive &= Math.Abs(f - exp) < 1e-3f;
+        }
+        Check("hand reactive: 80/88/100/112/120/140/152 units -> x1.00/0.90/0.75/0.60/0.50/0.25/0.10 through the real StatWorker", handReactive);
+        Hold(handMover, silver, 140);
+        Check("hand load uses VolumePerUnit, not Mass: 140 silver = 28 kg but load 140 -> x0.25 (mass would give x1)", Math.Abs(OverloadUtility.ActualHandLoad(handMover) - 140f) < 1e-4f && Math.Abs(MoveFactor(handMover) - 0.25f) < 1e-3f);
+        Hold(handMover, dust, 1000);
+        Check("smallVolume item (VolumePerUnit 0.1): 1000 units = load 100 -> x0.75", Math.Abs(OverloadUtility.ActualHandLoad(handMover) - 100f) < 1e-3f && Math.Abs(MoveFactor(handMover) - 0.75f) < 1e-3f);
+        Check("hand stack stays out of the mass channel (ActualSupportedMass unchanged)", OverloadUtility.ActualSupportedMass(handMover) == MassUtility.GearAndInventoryMass(handMover) && OverloadUtility.ActualSupportedMass(handMover) == 0f);
+        Check("stat explanation names the hand channel when it limits", OverloadExplanation(handMover) != null && OverloadExplanation(handMover).Contains("Overload_MoveSpeedExplanationHand"));
+
+        Console.WriteLine("\n--- combined channels: min(mass, hand), never the product ---");
+        Pawn both = Player(Human("Both", H80), playerFaction); OverloadUtility.SetPolicy(both, 0.10f);
+        float cm = OverloadUtility.ComfortableCapacity(both);
+        var massDust = ItemDef("TestMassDust", cm / 100f, 10000);
+        Func<float, float, float> combo = (massRatio, handRatio) =>
+        {
+            ClearInventory(both); Hold(both, silver, 0);
+            if (massRatio > 0f) AddItem(both, massDust, (int)Math.Round(massRatio * 100f));
+            if (handRatio > 0f) Hold(both, silver, (int)Math.Round(handRatio * 80f));
+            return MoveFactor(both);
+        };
+        float m06h05 = combo(1.4f, 1.5f), m10h05 = combo(0f, 1.5f), m06h10 = combo(1.4f, 0f), m10h10 = combo(0.5f, 0.5f);
+        string lim = RunWith(() => { combo(1.4f, 1.5f); return true; }) ? OverloadUtility.Evaluate(both).Limiting.ToString() : "";
+        Console.WriteLine(string.Format("  mass 0.60 / hand 0.50 -> x{0:0.00} (limited by {4}); mass 1 / hand 0.50 -> x{1:0.00}; mass 0.60 / hand 1 -> x{2:0.00}; both under -> x{3:0.00}", m06h05, m10h05, m06h10, m10h10, lim));
+        Check("combined: mass 0.60 + hand 0.50 -> 0.50 (min), NOT 0.30 (product)", Math.Abs(m06h05 - 0.5f) < 1e-3f && lim == "Hand");
+        Check("combined: mass 1.00 / hand 0.50 -> 0.50", Math.Abs(m10h05 - 0.5f) < 1e-3f);
+        Check("combined: mass 0.60 / hand 1.00 -> 0.60", Math.Abs(m06h10 - 0.6f) < 1e-3f);
+        Check("combined: both within comfortable -> 1.00", Math.Abs(m10h10 - 1f) < 1e-6f);
+
+        Console.WriteLine("\n--- mass channel unchanged alongside hand overload ---");
+        Pawn massP = Player(Human("MassP", C80), playerFaction); OverloadUtility.SetPolicy(massP, 0.25f); AddItem(massP, gold, 100);
+        float massCapBefore = MassUtility.Capacity(massP, null), freeBefore = MassUtility.FreeSpace(massP), mfBefore = MoveFactor(massP);
+        Hold(massP, silver, 50); // hand load 50 vs comfortable hand 171: no hand overload
+        Check("inventory Overload exactly as before with a hand stack present: capacity 140, FreeSpace 40, x0.75, mass excludes the hand stack",
+            NearKg(massCapBefore, 140f) && NearKg(MassUtility.Capacity(massP, null), 140f) && NearKg(MassUtility.FreeSpace(massP), freeBefore) && NearKg(freeBefore, 40f)
+            && Math.Abs(mfBefore - 0.75f) < 1e-3f && Math.Abs(MoveFactor(massP) - 0.75f) < 1e-3f && NearKg(OverloadUtility.ActualSupportedMass(massP), 100f));
+
+        Console.WriteLine("\n--- RAID (hand channel): thief carrying a stolen stack, NPC policy 25% ---");
+        S.overloadNonPlayerDefault = 0.25f;
+        Pawn thiefH = Human("ThiefH", H80);
+        Hold(thiefH, silver, 135);
+        float comfH0 = OverloadUtility.ComfortableHandCapacity(thiefH), routineH0 = OverloadUtility.RoutineHandCapacity(thiefH);
+        Console.WriteLine(string.Format("  HEALTHY   comfortable hand {0:0.0}, routine {1:0.0}, vanilla carry limit {2}, carrying 135 (load {3:0.0}) -> {4:0.00}% -> x{5:0.000}",
+            comfH0, routineH0, thiefH.carryTracker.MaxStackSpaceEver(silver), OverloadUtility.ActualHandLoad(thiefH), 100f * 135f / comfH0, MoveFactor(thiefH)));
+        Check("thief healthy: comfortable hand 80, routine 140, MaxStackSpaceEver 140, carrying 135 -> 168.75% -> x0.3125",
+            Math.Abs(comfH0 - 80f) < 0.01f && Math.Abs(routineH0 - 140f) < 0.02f && thiefH.carryTracker.MaxStackSpaceEver(silver) == 140 && Math.Abs(MoveFactor(thiefH) - 0.3125f) < 1e-3f);
+        olComp.ProcessDue(int.MaxValue); dropper.Ground.Clear(); runsBefore = olComp.ReconciliationsRun;
+        ShootLegs(thiefH, 0.75f); // real injuries -> Load Support -> CarryingCapacity
+        float comfH1 = OverloadUtility.ComfortableHandCapacity(thiefH), routineH1 = OverloadUtility.RoutineHandCapacity(thiefH);
+        int limitH1 = thiefH.carryTracker.MaxStackSpaceEver(silver);
+        bool thiefQueued = olComp.IsQueued(thiefH);
+        ticks.SetValue(tm, (int)ticks.GetValue(tm) + OverloadGameComponent.CoalesceDelayTicks); olComp.GameComponentTick();
+        int keptH = thiefH.carryTracker.CarriedThing != null ? thiefH.carryTracker.CarriedThing.stackCount : 0;
+        Console.WriteLine(string.Format("  SHOT      comfortable hand {0:0.0}, routine {1:0.0}, vanilla carry limit {2}; queued {3}; dropped {4}, still carrying {5} -> x{6:0.000}",
+            comfH1, routineH1, limitH1, thiefQueued, GroundCount(silver), keptH, MoveFactor(thiefH)));
+        Check("thief shot: comfortable hand ~60 (" + comfH1.ToString("0.0") + "), routine = comfortable x 1.75, vanilla MaxStackSpaceEver = RoundToInt(routine)",
+            Math.Abs(comfH1 - 60f) <= 3f && Near(routineH1, comfH1 * 1.75f, 0.001f) && limitH1 == (int)Math.Round(routineH1, MidpointRounding.ToEven));
+        Check("thief shot: one reconciliation; only the excess (135 - limit = " + (135 - limitH1) + ") spilled, the rest stays in the carry tracker",
+            thiefQueued && olComp.ReconciliationsRun == runsBefore + 1 && GroundCount(silver) == 135 - limitH1 && keptH == limitH1 && keptH > 0);
+        Check("thief after spill: movement ~x0.25 (derived: 2 - kept / comfortable)", Math.Abs(MoveFactor(thiefH) - OverloadFormula.ReactiveFactor(keptH, comfH1)) < 1e-3f && Math.Abs(MoveFactor(thiefH) - 0.25f) <= 0.03f);
+        S.overloadNonPlayerDefault = 1f;
+
+        Console.WriteLine("\n--- carried pawn: not part of the hand channel (Burden is a later module) ---");
+        Pawn porter = Player(Human("Porter", H80), playerFaction); Pawn patient = Human("Patient", H80);
+        if (!porter.carryTracker.innerContainer.TryAdd(patient, true)) // synthetic pawns lack what vanilla checks; place it directly
+            ((List<Thing>)typeof(ThingOwner<Thing>).GetField("innerList", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(porter.carryTracker.innerContainer)).Add(patient);
+        foreach (var a in Parts(porter, BodyPartTagDefOf.ManipulationLimbCore)) RemovePart(porter, a); // CarryingCapacity -> 0
+        dropper.Ground.Clear();
+        OverloadReconcileReport rp = OverloadReconciler.Reconcile(porter);
+        Check("carried pawn: no hand load, no hand factor, never dropped even when the carry limit is 0",
+            porter.carryTracker.CarriedThing == patient && OverloadUtility.HandStack(porter) == null && OverloadUtility.ActualHandLoad(porter) == 0f
+            && Math.Abs(MoveFactor(porter) - 1f) < 1e-6f && rp.CarriedUnitsDropped == 0 && dropper.Ground.Count == 0);
+        var corpseDef = ItemDef("TestCorpse", 60f, 1, typeof(Corpse));
+        Check("corpse: excluded from the hand channel by type (HandStack filter)", RunWith(() =>
+        {
+            Pawn bearer = Player(Human("Bearer", H80), playerFaction);
+            Thing corpse = MakeItem(corpseDef, 1);
+            try { bearer.carryTracker.innerContainer.TryAdd(corpse, true); } catch { return OverloadUtility.HandStack(bearer) == null; }
+            return bearer.carryTracker.CarriedThing == corpse && OverloadUtility.HandStack(bearer) == null && OverloadUtility.ActualHandLoad(bearer) == 0f;
+        }));
+
+        // ---- trade pawns are left to vanilla ----
+        S.overloadNonPlayerDefault = 0.25f;
+        Pawn tradeCarrier = Human("OlTrader", C80); tradeCarrier.trader = new Pawn_TraderTracker(tradeCarrier); tradeCarrier.trader.traderKind = new TraderKindDef();
+        AddItem(tradeCarrier, gold, 200);
+        Check("trade pawn (vanilla trader): no exposed overload, no slowdown, no spill", NearKg(MassUtility.Capacity(tradeCarrier, null), 80f) && MoveFactor(tradeCarrier) == 1f && !OverloadReconciler.Reconcile(tradeCarrier).Ran);
+        Check("trade pawn: no hand overload either (CarryingCapacity unchanged at NPC 25%)", RunWith(() => { float a = tradeCarrier.GetStatValue(carryStat, true, -1); S.overloadEnabled = false; float b = tradeCarrier.GetStatValue(carryStat, true, -1); S.overloadEnabled = true; return Near(a, b, 0.0001f); }));
+        S.overloadNonPlayerDefault = 1f;
+
+        // ---- no drop context (caravan / unspawned): never spills ----
+        dropper.Context = false; dropper.Ground.Clear();
+        Pawn caravaner = Player(Human("OlCaravan", C80), playerFaction); AddItem(caravaner, gold, 150);
+        Injure(caravaner, Parts(caravaner, BodyPartTagDefOf.MovingLimbCore)[0], 10f);
+        Check("no safe place to drop (caravan/unspawned): nothing queued, nothing dropped", !olComp.IsQueued(caravaner) && !OverloadReconciler.Reconcile(caravaner).Ran && dropper.Ground.Count == 0);
+        dropper.Context = true;
+
+        Check("MassUtility (caravan) sees routine capacity; movement uses comfortable (both from the same real pipeline)",
+            RunWith(() => { OverloadUtility.SetPolicy(caravaner, 0.5f); return Near(caravanOf(caravaner), OverloadUtility.ComfortableCapacity(caravaner) * 1.5f, 0.001f); }));
+
+        // ---- another mod's mass hook that reads MoveSpeed must not recurse ----
+        third.Patch(massCap, postfix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyReadsMoveSpeedPostfix", BindingFlags.Static | BindingFlags.NonPublic)));
+        Pawn loopy = Player(Human("OlLoopy", C80), playerFaction); AddItem(loopy, gold, 100);
+        float loopyF = MoveFactor(loopy);
+        third.UnpatchAll(ThirdPartyId);
+        Check("a mass-capacity hook that reads MoveSpeed does not recurse; factor still correct (x0.75)", Math.Abs(loopyF - 0.75f) < 1e-3f);
+
+        // ---- benchmarks ----
+        Console.WriteLine("\n=== Overload benchmarks (Mono JIT, outside Unity) ===");
+        Pawn bench = Player(Human("OlBench", C80), playerFaction); OverloadUtility.SetPolicy(bench, 0.25f); AddItem(bench, gold, 60);
+        Pawn benchOver = Player(Human("OlBenchOver", C80), playerFaction); OverloadUtility.SetPolicy(benchOver, 0.25f); AddItem(benchOver, gold, 120);
+        Pawn npcBench = Human("OlNpcBench", C80);
+        Bench("policy lookup (player, individual)", 5000000, () => OverloadUtility.PolicyFor(bench));
+        Bench("policy lookup (non-player, default 100%)", 5000000, () => OverloadUtility.PolicyFor(npcBench));
+        Bench("ComfortableCapacity query (uncached)", 1000000, () => OverloadUtility.ComfortableCapacity(bench));
+        Bench("ComfortableCapacity (per-tick cached)", 5000000, () => OverloadUtility.ComfortableCapacityCached(bench));
+        Bench("exposed MassUtility.Capacity (LS + Overload)", 1000000, () => MassUtility.Capacity(bench, null));
+        S.overloadEnabled = false; double moveOff = Bench("MoveSpeed, Overload disabled (baseline)", 500000, () => Move(bench)); S.overloadEnabled = true;
+        Bench("MoveSpeed below comfortable load", 500000, () => Move(bench));
+        Bench("MoveSpeed overloaded", 500000, () => Move(benchOver));
+        Pawn benchIdle = Player(Human("OlBenchIdle", C80), playerFaction); AddItem(benchIdle, gold, 20);
+        Bench("reconciliation that exits immediately (under limit)", 200000, () => OverloadReconciler.Reconcile(benchIdle));
+        Pawn benchSplit = Player(Human("OlBenchSplit", C80), playerFaction); OverloadUtility.SetPolicy(benchSplit, 1f); AddItem(benchSplit, gold, 80);
+        Bench("reconciliation with a stack split (add 1 unit, split it off)", 100000, () => { AddItem(benchSplit, gold, 1); OverloadReconciler.Reconcile(benchSplit); dropper.Ground.Clear(); });
+        third.Patch(massCap, prefix: new HarmonyMethod(typeof(IntegrationTests).GetMethod("ThirdPartyStatPrefix", BindingFlags.Static | BindingFlags.NonPublic)));
+        Bench("PR #2 recursive VEF-style Capacity path, Overload 25% active", 500000, () => MassUtility.Capacity(olDuster, null));
+        Pawn hb0 = Player(Human("HbNone", H80), playerFaction); OverloadUtility.SetPolicy(hb0, 0.25f); AddItem(hb0, gold, 20);
+        Pawn hb1 = Player(Human("HbUnder", H80), playerFaction); OverloadUtility.SetPolicy(hb1, 0.25f); hb1.carryTracker.innerContainer.TryAdd(MakeItem(silver, 60), true);
+        Pawn hb2 = Player(Human("HbOver", H80), playerFaction); OverloadUtility.SetPolicy(hb2, 0.25f); hb2.carryTracker.innerContainer.TryAdd(MakeItem(silver, 120), true);
+        Pawn hb3 = Player(Human("HbBoth", H80), playerFaction); OverloadUtility.SetPolicy(hb3, 0.25f); AddItem(hb3, gold, 50); hb3.carryTracker.innerContainer.TryAdd(MakeItem(silver, 120), true);
+        Bench("CurrentFactor, no hand stack (mass only)", 1000000, () => OverloadUtility.CurrentFactor(hb0));
+        Bench("CurrentFactor, hand stack <= comfortable", 1000000, () => OverloadUtility.CurrentFactor(hb1));
+        Bench("CurrentFactor, hand-overloaded", 1000000, () => OverloadUtility.CurrentFactor(hb2));
+        Bench("CurrentFactor, mass + hand overloaded (min)", 1000000, () => OverloadUtility.CurrentFactor(hb3));
+        Bench("ComfortableHandCapacity (per-tick cached)", 2000000, () => OverloadUtility.ComfortableHandCapacityCached(hb2));
+        Bench("ComfortableHandCapacity (uncached stat query)", 500000, () => OverloadUtility.ComfortableHandCapacity(hb2));
+        Bench("exposed CarryingCapacity (LS + compensation + hand Overload)", 500000, () => hb2.GetStatValue(carryStat, true, -1));
+        third.UnpatchAll(ThirdPartyId);
+        long om0 = GC.GetTotalMemory(false);
+        for (int i = 0; i < 100000; i++) { MassUtility.Capacity(bench, null); Move(benchOver); OverloadUtility.PolicyFor(bench); OverloadUtility.CurrentFactor(hb3); }
+        long om1 = GC.GetTotalMemory(false);
+        Check("capacity/movement/policy/hand hot paths allocate nothing measurable (" + (om1 - om0) + " bytes / 100k)", om1 - om0 < 16 * 1024);
+
+        OverloadReconciler.Dropper = vanillaDropper;
+        olComp.ProcessDue(int.MaxValue);
+        Check("Overload section leaves no pending work and guard depth 0", olComp.PendingCount == 0 && Patch_MassUtility_Capacity.Depth == 0 && OverloadUtility.ComfortableQueryPawn == null);
 
         // ================= Cache =================
         Console.WriteLine("\n=== Cache: dirty events, time expiry, settings generation, clock rollback, weak keys ===");

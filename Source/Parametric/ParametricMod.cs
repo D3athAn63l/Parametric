@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using Parametric.LoadSupport;
 using RimWorld;
@@ -9,7 +10,8 @@ namespace Parametric
 {
     /// <summary>
     /// Parametric: a lightweight background systems mod.
-    /// v0.1 contains one module, Load Support (body-derived carrying capability).
+    /// Modules: Load Support (body-derived carrying capability) and Overload (routine capacity above comfortable,
+    /// reactive movement slowdown, event-driven excess-cargo spill).
     ///
     /// This class owns the settings and the single Harmony instance for the whole mod.
     /// </summary>
@@ -77,6 +79,22 @@ namespace Parametric
                 "LoadSupport_SettingInspectDesc".Translate());
             ls.GapLine();
 
+            // ---------------- Overload module ----------------
+            Text.Font = GameFont.Medium;
+            ls.Label("Overload_SectionHeader".Translate());
+            Text.Font = GameFont.Small;
+            ls.Label("Overload_SectionDesc".Translate());
+            ls.Gap(6f);
+            ls.CheckboxLabeled("Overload_SettingEnabled".Translate(), ref Settings.overloadEnabled, "Overload_SettingEnabledDesc".Translate());
+            if (ls.ButtonTextLabeled("Overload_SettingPlayerDefault".Translate(),
+                    Parametric.Overload.Command_OverloadPolicy.PolicyMenuLabel(Settings.overloadPlayerDefault)))
+                Find.WindowStack.Add(new FloatMenu(PolicyOptions(v => Settings.overloadPlayerDefault = v)));
+            if (ls.ButtonTextLabeled("Overload_SettingNonPlayerDefault".Translate(),
+                    Parametric.Overload.Command_OverloadPolicy.PolicyMenuLabel(Settings.overloadNonPlayerDefault)))
+                Find.WindowStack.Add(new FloatMenu(PolicyOptions(v => Settings.overloadNonPlayerDefault = v)));
+            ls.Label("Overload_SettingDefaultsDesc".Translate());
+            ls.GapLine();
+
             // ---------------- Mod-level ----------------
             ls.CheckboxLabeled("Parametric_SettingDebug".Translate(), ref Settings.debugLogging,
                 "Parametric_SettingDebugDesc".Translate());
@@ -101,6 +119,32 @@ namespace Parametric
         {
             base.WriteSettings();
             LoadSupportCache.InvalidateAll();
+            Parametric.Overload.OverloadUtility.InvalidateAll();
+            // A stricter default (or re-enabling the module) can leave pawns above their routine limit: queue a check
+            // for every spawned pawn that carries something. One-off, only when the settings window is closed.
+            try
+            {
+                Parametric.Overload.OverloadGameComponent comp = Parametric.Overload.OverloadGameComponent.Instance;
+                if (comp != null && Settings.overloadEnabled && Current.ProgramState == ProgramState.Playing && Find.Maps != null)
+                    foreach (Map map in Find.Maps)
+                        foreach (Pawn p in map.mapPawns.AllPawnsSpawned)
+                            if (Parametric.Overload.OverloadUtility.HasDroppableCargo(p)) comp.RequestReconciliation(p, 0);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(Parametric.Overload.OverloadLog.Prefix + "Could not queue reconciliation after a settings change: " + ex.Message);
+            }
+        }
+
+        private static List<FloatMenuOption> PolicyOptions(Action<float> set)
+        {
+            var options = new List<FloatMenuOption>();
+            foreach (float preset in Parametric.Overload.OverloadFormula.Presets)
+            {
+                float v = preset;
+                options.Add(new FloatMenuOption(Parametric.Overload.Command_OverloadPolicy.PolicyMenuLabel(v), () => set(v)));
+            }
+            return options;
         }
 
         private static string Preview(float efficiency)
@@ -122,6 +166,17 @@ namespace Parametric
             catch (Exception ex)
             {
                 Log.Error(LoadSupportLog.Prefix + "Failed to attach to the CarryingCapacity stat: " + ex);
+            }
+
+            try
+            {
+                Parametric.Overload.StatPart_Overload.InjectInto(StatDefOf.MoveSpeed);
+                // After StatPart_LoadSupport (injected above): comfortable hand capacity includes Load Support.
+                Parametric.Overload.StatPart_OverloadHandCarry.InjectInto(StatDefOf.CarryingCapacity);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(Parametric.Overload.OverloadLog.Prefix + "Failed to attach to the MoveSpeed/CarryingCapacity stats: " + ex);
             }
 
             if (ParametricMod.Settings != null && ParametricMod.Settings.debugLogging)

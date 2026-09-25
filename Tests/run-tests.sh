@@ -8,7 +8,7 @@ API="${MONO_API:-/usr/lib/mono/4.7.2-api}"
 NETSTD="${RIMWORLD_MANAGED:-/nonexistent}/netstandard.dll"; [ -f "$NETSTD" ] || NETSTD="$API/Facades/netstandard.dll"
 
 echo "### Formula tests"
-mcs -langversion:7.2 -out:"$OUT/FormulaTests.exe" Tests/FormulaTests.cs Source/Parametric/LoadSupport/LoadSupportFormula.cs
+mcs -langversion:7.2 -out:"$OUT/FormulaTests.exe" Tests/FormulaTests.cs Source/Parametric/LoadSupport/LoadSupportFormula.cs Source/Parametric/Overload/OverloadFormula.cs
 mono "$OUT/FormulaTests.exe"
 
 echo; echo "### Integration tests"
