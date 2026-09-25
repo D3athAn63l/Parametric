@@ -65,10 +65,11 @@ namespace Parametric.Overload
     /// never destroys anything; never raises capacity to fit. What cannot be dropped simply stays and keeps the pawn
     /// reactively overloaded.
     ///
-    /// Also sheds the part of a hand-carried stack that exceeds the pawn's CURRENT vanilla hand-carry limit
-    /// (Pawn_CarryTracker.MaxStackSpaceEver = CarryingCapacity / VolumePerUnit): an injured thief whose carrying
-    /// capacity fell spills the excess of what it is carrying. Only stackable things; carried pawns and corpses are
-    /// never dropped.
+    /// Hand channel: sheds the part of a hand-carried stack that exceeds the pawn's CURRENT vanilla hand-carry limit,
+    /// Pawn_CarryTracker.MaxStackSpaceEver = RoundToInt(CarryingCapacity / VolumePerUnit). CarryingCapacity already
+    /// contains Overload's routine hand multiplier (StatPart_OverloadHandCarry), so this limit IS the routine hand
+    /// limit: an injured thief whose comfortable hand capacity fell spills only the units above comfortable × (2 − policy).
+    /// Only stackable things; carried pawns and corpses are never dropped (Burden, not modelled here).
     /// </summary>
     public static class OverloadReconciler
     {

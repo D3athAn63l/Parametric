@@ -171,10 +171,12 @@ namespace Parametric
             try
             {
                 Parametric.Overload.StatPart_Overload.InjectInto(StatDefOf.MoveSpeed);
+                // After StatPart_LoadSupport (injected above): comfortable hand capacity includes Load Support.
+                Parametric.Overload.StatPart_OverloadHandCarry.InjectInto(StatDefOf.CarryingCapacity);
             }
             catch (Exception ex)
             {
-                Log.Error(Parametric.Overload.OverloadLog.Prefix + "Failed to attach to the MoveSpeed stat: " + ex);
+                Log.Error(Parametric.Overload.OverloadLog.Prefix + "Failed to attach to the MoveSpeed/CarryingCapacity stats: " + ex);
             }
 
             if (ParametricMod.Settings != null && ParametricMod.Settings.debugLogging)

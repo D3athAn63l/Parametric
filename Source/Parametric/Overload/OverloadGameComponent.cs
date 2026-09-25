@@ -13,7 +13,8 @@ namespace Parametric.Overload
     ///   travels with caravans and map changes because it is keyed by the pawn's permanent thingIDNumber, not by map).
     ///   Only explicit overrides are stored: a pawn set back to the player default is removed and inherits it again.
     ///   Non-player pawns never get records; they use the global non-player default from the mod settings.
-    ///   Records of pawns that no longer exist anywhere are pruned when saving.
+    ///   Records of pawns that no longer exist anywhere (maps, world, caravans, travelling transporters, alive or
+    ///   dead) are pruned when saving.
     ///
     /// RECONCILIATION QUEUE (event-driven, coalesced)
     ///   Capacity-affecting events (HediffSet.DirtyCache, a Load Support drop found by the cache's timer, a stricter
@@ -144,24 +145,38 @@ namespace Parametric.Overload
             }
         }
 
-        /// <summary>Drops records of pawns that exist nowhere any more (alive or dead, any map, world, caravans).</summary>
+        /// <summary>
+        /// Drops records of pawns that exist nowhere any more. The population is vanilla's widest pawn collection,
+        /// PawnsFinder.All_AliveOrDead, which in 1.6 is AllMapsWorldAndTemporary_AliveOrDead (map pawns, world pawns
+        /// alive and dead, temporary pawns, gravship pawns) PLUS AllCaravansAndTravellingTransporters_AliveOrDead
+        /// (caravan members and pawns in travelling transporters). Caravan pawns are NOT in the first collection, so
+        /// using it alone would delete the policy of every pawn that is away in a caravan when the game is saved.
+        /// </summary>
         private void PruneStale()
         {
             if (policies.Count == 0) return;
             try
             {
-                var alive = new HashSet<int>();
-                foreach (Pawn p in PawnsFinder.AllMapsWorldAndTemporary_AliveOrDead)
-                    if (p != null) alive.Add(p.thingIDNumber);
-                if (alive.Count == 0) return; // no world (tests / odd states): never prune blindly
-                var stale = new List<int>();
-                foreach (int id in policies.Keys) if (!alive.Contains(id)) stale.Add(id);
-                for (int i = 0; i < stale.Count; i++) policies.Remove(stale[i]);
+                PruneStaleAgainst(PawnsFinder.All_AliveOrDead);
             }
             catch
             {
                 // Pruning is housekeeping only; never block a save.
             }
+        }
+
+        /// <summary>Removes records whose pawn is not in <paramref name="existing"/>. Returns how many were removed. Public for tests.</summary>
+        public int PruneStaleAgainst(IEnumerable<Pawn> existing)
+        {
+            if (policies.Count == 0 || existing == null) return 0;
+            var alive = new HashSet<int>();
+            foreach (Pawn p in existing)
+                if (p != null) alive.Add(p.thingIDNumber);
+            if (alive.Count == 0) return 0; // no world (tests / odd states): never prune blindly
+            var stale = new List<int>();
+            foreach (int id in policies.Keys) if (!alive.Contains(id)) stale.Add(id);
+            for (int i = 0; i < stale.Count; i++) policies.Remove(stale[i]);
+            return stale.Count;
         }
     }
 

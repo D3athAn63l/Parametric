@@ -45,15 +45,20 @@ namespace Parametric.Overload
         private static string Tooltip(Pawn pawn, float policy)
         {
             string text = "Overload_GizmoDesc".Translate();
-            float mass, comfortable;
-            float factor = OverloadUtility.CurrentFactor(pawn, out mass, out comfortable);
-            if (!(comfortable > 0f)) comfortable = OverloadUtility.ComfortableCapacityCached(pawn);
-            if (!(mass > 0f)) mass = OverloadUtility.ActualSupportedMass(pawn);
-            text += "\n\n" + "Overload_GizmoLive".Translate(
+            OverloadUtility.State st = OverloadUtility.Evaluate(pawn);
+            float comfortable = st.ComfortableMass > 0f ? st.ComfortableMass : OverloadUtility.ComfortableCapacityCached(pawn);
+            float mass = st.Mass > 0f ? st.Mass : OverloadUtility.ActualSupportedMass(pawn);
+            text += "\n\n" + "Overload_GizmoLiveMass".Translate(
                 comfortable.ToStringMass(),
                 OverloadFormula.RoutineCapacity(comfortable, policy).ToStringMass(),
-                mass.ToStringMass(),
-                factor.ToStringPercent());
+                mass.ToStringMass());
+            if (st.HasHandStack)
+            {
+                float hand = st.ComfortableHand > 0f ? st.ComfortableHand : OverloadUtility.ComfortableHandCapacityCached(pawn);
+                text += "\n" + "Overload_GizmoLiveHand".Translate(
+                    hand.ToString("0"), OverloadFormula.RoutineCapacity(hand, policy).ToString("0"), st.HandLoad.ToString("0.#"));
+            }
+            text += "\n" + "Overload_GizmoLiveFactor".Translate(st.Factor.ToStringPercent());
             if (OverloadUtility.HasIndividualPolicy(pawn)) text += "\n" + "Overload_GizmoIndividual".Translate();
             return text;
         }

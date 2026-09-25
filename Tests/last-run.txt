@@ -80,7 +80,7 @@
   ok:   uniform sweep monotonic
   ok:   no discontinuity around 100% (max step < 0.05)
   ok:   200k random inputs (incl. negative, absent regions, bad exponents) always valid
-  info: formula cost 0.114 µs/call (sink 1179415)
+  info: formula cost 0.150 µs/call (sink 1179415)
 
 === Overload: policy -> routine capacity (comfortable 80 kg) ===
   policy 100%  multiplier x1.00  routine   80.0 kg
@@ -133,9 +133,9 @@
 ALL FORMULA TESTS PASSED
 
 ### Integration tests
-Tests/IntegrationTests.cs(579,15): warning CS0219: The constant `X_' is never used
-Tests/IntegrationTests.cs(1086,76): warning CS0219: The variable `Lp' is assigned but its value is never used
-Tests/IntegrationTests.cs(1348,43): warning CS0219: The variable `moveOff' is assigned but its value is never used
+Tests/IntegrationTests.cs(595,15): warning CS0219: The constant `X_' is never used
+Tests/IntegrationTests.cs(1102,76): warning CS0219: The variable `Lp' is assigned but its value is never used
+Tests/IntegrationTests.cs(1547,43): warning CS0219: The variable `moveOff' is assigned but its value is never used
 Compilation succeeded - 3 warning(s)
 === Harmony: applying Parametric's patches to real 1.6 methods ===
   patched: RimWorld.MassUtility.Capacity(Pawn, StringBuilder)
@@ -530,11 +530,11 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
 
 --- reactive movement (comfortable 80 kg; mass = real inventory) ---
     80 kg -> MoveSpeed 4.600 (x1.00, expected x1.00)  [no explanation line]
-    88 kg -> MoveSpeed 4.140 (x0.90, expected x0.90)  [stat explanation: Overload_MoveSpeedExplanation]
-   100 kg -> MoveSpeed 3.450 (x0.75, expected x0.75)  [stat explanation: Overload_MoveSpeedExplanation]
-   112 kg -> MoveSpeed 2.760 (x0.60, expected x0.60)  [stat explanation: Overload_MoveSpeedExplanation]
-   120 kg -> MoveSpeed 2.300 (x0.50, expected x0.50)  [stat explanation: Overload_MoveSpeedExplanation]
-   140 kg -> MoveSpeed 1.150 (x0.25, expected x0.25)  [stat explanation: Overload_MoveSpeedExplanation]
+    88 kg -> MoveSpeed 4.140 (x0.90, expected x0.90)  [stat explanation: Overload_MoveSpeedExplanationMass]
+   100 kg -> MoveSpeed 3.450 (x0.75, expected x0.75)  [stat explanation: Overload_MoveSpeedExplanationMass]
+   112 kg -> MoveSpeed 2.760 (x0.60, expected x0.60)  [stat explanation: Overload_MoveSpeedExplanationMass]
+   120 kg -> MoveSpeed 2.300 (x0.50, expected x0.50)  [stat explanation: Overload_MoveSpeedExplanationMass]
+   140 kg -> MoveSpeed 1.150 (x0.25, expected x0.25)  [stat explanation: Overload_MoveSpeedExplanationMass]
   ok:   reactive: 80/88/100/112/120/140 kg -> x1.00/0.90/0.75/0.60/0.50/0.25 through the real StatWorker
   ok:   dropping 20 kg (120 -> 100) immediately changes x0.50 -> x0.75 (same tick, no polling)
   ok:   stat explanation: overload line only when overloaded (none at or below comfortable)
@@ -593,27 +593,104 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   ok:   heavy raider: comfortable 100 -> ~50 (48.5), all 50 kg loot spilled, armor kept (not stripped), not Downed
   ok:   heavy raider: movement follows unavoidable 90 kg / comfortable (~180% -> ~x0.20), below the 25% policy, no capacity cheating
 
---- RAID: thief hand-carrying stolen stack (vanilla JobGiver_Steal uses the carry tracker) ---
-  carrying 75 gold (limit 75); legs shot -> Load Support 0.79, limit 59: dropped 16, still carrying 59
-  ok:   hand-carried loot: the part above the new vanilla carry limit spills; the rest is kept
+=== Persistence: policy of a caravan / travelling pawn survives pruning ===
+  ok:   vanilla All_AliveOrDead = maps/world/temporary + caravans/transporters (real aggregator)
+  first revision (AllMapsWorldAndTemporary_AliveOrDead): pruned 2 record(s), caravan pawn's policy kept: False
+  ok:   REPRODUCED: pruning against AllMapsWorldAndTemporary_AliveOrDead deletes the caravan pawn's 25% policy
+  fixed save: records 9 -> 2; after reload: caravan pawn 25%, map pawn 50%, vanished pawn 100%
+  ok:   save with the pawn in a caravan: its 25% record survives pruning
+  ok:   stale-record cleanup still works: a pawn that exists nowhere loses its record
+  ok:   after reload PolicyFor(caravan pawn) is still 25% (map pawn 50%)
+  ok:   prune with no known population never deletes (no world)
+
+=== Hand-carry channel: CarryingCapacity x routine multiplier (StatPart_OverloadHandCarry) ===
+  ok:   CarryingCapacity: one StatPart_OverloadHandCarry, idempotent, AFTER StatPart_LoadSupport
+  policy 100%: comfortable  80.00  exposed CarryingCapacity  80.00  (x1.00)
+  policy  75%: comfortable  80.00  exposed CarryingCapacity 100.00  (x1.25)
+  policy  50%: comfortable  80.00  exposed CarryingCapacity 120.00  (x1.50)
+  policy  25%: comfortable  80.00  exposed CarryingCapacity 140.00  (x1.75)
+  policy  10%: comfortable  80.00  exposed CarryingCapacity 152.00  (x1.90)
+  ok:   hand capacity: 100/75/50/25/10% -> 80/100/120/140/152 (comfortable stays 80, x1.00..x1.90 once)
+  ok:   100% policy: exposed CarryingCapacity = comfortable = vanilla-composed value (no part explanation)
+  Load Support + hand overload (exactly once; comfortable keeps Load Support):
+    A LS 15.59 + 25%                         comfortable   1169.1 (exp   1169.1, Overload off   1169.1)  exposed   2046.0 = x1.75
+  ok:   hand A LS 15.59 + 25%: comfortable = expected (LS kept, Overload excluded), exposed = comfortable x routine multiplier exactly once
+  ok:   hand A: comfortable contains Load Support (differs from the Parametric-bypassed vanilla value)
+    B LS exactly 1 + 25%                     comfortable     75.0 (exp     75.0, Overload off     75.0)  exposed    131.3 = x1.75
+  ok:   hand B LS exactly 1 + 25%: comfortable = expected (LS kept, Overload excluded), exposed = comfortable x routine multiplier exactly once
+    C Load Support disabled + 25%            comfortable    225.0 (exp    225.0, Overload off    225.0)  exposed    393.8 = x1.75
+  ok:   hand C Load Support disabled + 25%: comfortable = expected (LS kept, Overload excluded), exposed = comfortable x routine multiplier exactly once
+    D LS active + 100%                       comfortable   1169.1 (exp   1169.1, Overload off   1169.1)  exposed   1169.1 = x1.00
+  ok:   hand D LS active + 100%: comfortable = expected (LS kept, Overload excluded), exposed = comfortable x routine multiplier exactly once
+  ok:   F exception inside the comfortable hand query: propagates, marker restored, next values correct
+
+--- vanilla thief: the REAL JobGiver_Steal.TryGiveJob (map searches stubbed, count formula vanilla) ---
+  thief comfortable CarryingCapacity 80, silver (0.2 kg, VolumePerUnit 1) stack 500: steal count at 100% = 80, at 25% = 140
+  ok:   vanilla steal count: 100% policy -> 80 units (vanilla (int)(CarryingCapacity / VolumePerUnit))
+  ok:   vanilla steal count: 25% NPC policy -> 140 units, through CarryingCapacity alone
+  ok:   no Parametric patch on JobGiver_Steal (or anything thief-specific)
+
+--- hand-carry reactive movement (comfortable hand 80, policy 10%) ---
+    80 silver ( 16.0 kg, load  80.0) -> x1.00 (expected x1.00)  -
+    88 silver ( 17.6 kg, load  88.0) -> x0.90 (expected x0.90)  Overload_MoveSpeedExplanationHand
+   100 silver ( 20.0 kg, load 100.0) -> x0.75 (expected x0.75)  Overload_MoveSpeedExplanationHand
+   112 silver ( 22.4 kg, load 112.0) -> x0.60 (expected x0.60)  Overload_MoveSpeedExplanationHand
+   120 silver ( 24.0 kg, load 120.0) -> x0.50 (expected x0.50)  Overload_MoveSpeedExplanationHand
+   140 silver ( 28.0 kg, load 140.0) -> x0.25 (expected x0.25)  Overload_MoveSpeedExplanationHand
+   152 silver ( 30.4 kg, load 152.0) -> x0.10 (expected x0.10)  Overload_MoveSpeedExplanationHand
+  ok:   hand reactive: 80/88/100/112/120/140/152 units -> x1.00/0.90/0.75/0.60/0.50/0.25/0.10 through the real StatWorker
+  ok:   hand load uses VolumePerUnit, not Mass: 140 silver = 28 kg but load 140 -> x0.25 (mass would give x1)
+  ok:   smallVolume item (VolumePerUnit 0.1): 1000 units = load 100 -> x0.75
+  ok:   hand stack stays out of the mass channel (ActualSupportedMass unchanged)
+  ok:   stat explanation names the hand channel when it limits
+
+--- combined channels: min(mass, hand), never the product ---
+  mass 0.60 / hand 0.50 -> x0.50 (limited by Hand); mass 1 / hand 0.50 -> x0.50; mass 0.60 / hand 1 -> x0.60; both under -> x1.00
+  ok:   combined: mass 0.60 + hand 0.50 -> 0.50 (min), NOT 0.30 (product)
+  ok:   combined: mass 1.00 / hand 0.50 -> 0.50
+  ok:   combined: mass 0.60 / hand 1.00 -> 0.60
+  ok:   combined: both within comfortable -> 1.00
+
+--- mass channel unchanged alongside hand overload ---
+  ok:   inventory Overload exactly as before with a hand stack present: capacity 140, FreeSpace 40, x0.75, mass excludes the hand stack
+
+--- RAID (hand channel): thief carrying a stolen stack, NPC policy 25% ---
+  HEALTHY   comfortable hand 80.0, routine 140.0, vanilla carry limit 140, carrying 135 (load 135.0) -> 168.75% -> x0.313
+  ok:   thief healthy: comfortable hand 80, routine 140, MaxStackSpaceEver 140, carrying 135 -> 168.75% -> x0.3125
+  SHOT      comfortable hand 60.7, routine 106.3, vanilla carry limit 106; queued True; dropped 29, still carrying 106 -> x0.255
+  ok:   thief shot: comfortable hand ~60 (60.7), routine = comfortable x 1.75, vanilla MaxStackSpaceEver = RoundToInt(routine)
+  ok:   thief shot: one reconciliation; only the excess (135 - limit = 29) spilled, the rest stays in the carry tracker
+  ok:   thief after spill: movement ~x0.25 (derived: 2 - kept / comfortable)
+
+--- carried pawn: not part of the hand channel (Burden is a later module) ---
+  ok:   carried pawn: no hand load, no hand factor, never dropped even when the carry limit is 0
+  ok:   corpse: excluded from the hand channel by type (HandStack filter)
   ok:   trade pawn (vanilla trader): no exposed overload, no slowdown, no spill
+  ok:   trade pawn: no hand overload either (CarryingCapacity unchanged at NPC 25%)
   ok:   no safe place to drop (caravan/unspawned): nothing queued, nothing dropped
   ok:   MassUtility (caravan) sees routine capacity; movement uses comfortable (both from the same real pipeline)
   ok:   a mass-capacity hook that reads MoveSpeed does not recurse; factor still correct (x0.75)
 
 === Overload benchmarks (Mono JIT, outside Unity) ===
-  policy lookup (player, individual)                             0.025 µs
-  policy lookup (non-player, default 100%)                       0.009 µs
-  ComfortableCapacity query (uncached)                           0.176 µs
-  ComfortableCapacity (per-tick cached)                          0.095 µs
-  exposed MassUtility.Capacity (LS + Overload)                   0.215 µs
-  MoveSpeed, Overload disabled (baseline)                        0.123 µs
-  MoveSpeed below comfortable load                               0.390 µs
-  MoveSpeed overloaded                                           0.431 µs
-  reconciliation that exits immediately (under limit)            0.765 µs
-  reconciliation with a stack split (add 1 unit, split it off)     2.330 µs
-  PR #2 recursive VEF-style Capacity path, Overload 25% active     0.287 µs
-  ok:   capacity/movement/policy hot paths allocate nothing measurable (0 bytes / 100k)
+  policy lookup (player, individual)                             0.028 µs
+  policy lookup (non-player, default 100%)                       0.012 µs
+  ComfortableCapacity query (uncached)                           0.220 µs
+  ComfortableCapacity (per-tick cached)                          0.112 µs
+  exposed MassUtility.Capacity (LS + Overload)                   0.257 µs
+  MoveSpeed, Overload disabled (baseline)                        0.165 µs
+  MoveSpeed below comfortable load                               0.501 µs
+  MoveSpeed overloaded                                           0.522 µs
+  reconciliation that exits immediately (under limit)            0.679 µs
+  reconciliation with a stack split (add 1 unit, split it off)     2.775 µs
+  PR #2 recursive VEF-style Capacity path, Overload 25% active     0.329 µs
+  CurrentFactor, no hand stack (mass only)                       0.344 µs
+  CurrentFactor, hand stack <= comfortable                       0.184 µs
+  CurrentFactor, hand-overloaded                                 0.189 µs
+  CurrentFactor, mass + hand overloaded (min)                    0.490 µs
+  ComfortableHandCapacity (per-tick cached)                      0.110 µs
+  ComfortableHandCapacity (uncached stat query)                  0.411 µs
+  exposed CarryingCapacity (LS + compensation + hand Overload)     0.445 µs
+  ok:   capacity/movement/policy/hand hot paths allocate nothing measurable (0 bytes / 100k)
   ok:   Overload section leaves no pending work and guard depth 0
 
 === Cache: dirty events, time expiry, settings generation, clock rollback, weak keys ===
@@ -628,19 +705,19 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   ok:   cached lookups allocate nothing measurable (0 bytes / 100k)
 
 === Benchmarks (Mono JIT, outside Unity; in-game numbers will differ) ===
-  full body evaluation (uncached)                               10.500 µs
-  cached lookup                                                  0.111 µs
-  manipulation compensation, superhuman arms (exact path)        0.143 µs
-  manipulation compensation, limbs <= 100% (early out)           0.020 µs
-  manipulation compensation, 300% arms + 3 other hediffs         0.170 µs
-  whole StatPart.TransformValue (cached LS + compensation)       0.257 µs
-  GetStatValue(CarryingCapacity) with Parametric                 0.461 µs
-  GetStatValue(CarryingCapacity) Parametric bypassed             0.205 µs
-  => Parametric adds ~0.256 µs per CarryingCapacity evaluation; compensation itself ~0.143 µs
-  MassUtility.Capacity with Parametric (prefix+postfix+finalizer)     0.185 µs
-    of which nesting guard alone (Prefix + Finalizer)            0.011 µs
-  MassUtility.Capacity vanilla (Parametric unpatched)            0.027 µs
-  => Parametric adds ~0.157 µs per MassUtility.Capacity call
+  full body evaluation (uncached)                               12.596 µs
+  cached lookup                                                  0.136 µs
+  manipulation compensation, superhuman arms (exact path)        0.182 µs
+  manipulation compensation, limbs <= 100% (early out)           0.024 µs
+  manipulation compensation, 300% arms + 3 other hediffs         0.273 µs
+  whole StatPart.TransformValue (cached LS + compensation)       0.359 µs
+  GetStatValue(CarryingCapacity) with Parametric                 0.678 µs
+  GetStatValue(CarryingCapacity) Parametric bypassed             0.304 µs
+  => Parametric adds ~0.373 µs per CarryingCapacity evaluation; compensation itself ~0.182 µs
+  MassUtility.Capacity with Parametric (prefix+postfix+finalizer)     0.237 µs
+    of which nesting guard alone (Prefix + Finalizer)            0.013 µs
+  MassUtility.Capacity vanilla (Parametric unpatched)            0.049 µs
+  => Parametric adds ~0.188 µs per MassUtility.Capacity call
   ok:   MassUtility.Capacity with Parametric allocates nothing measurable (0 bytes / 100k)
   ok:   re-patched after benchmark: exactly one Parametric prefix/postfix/finalizer
 
@@ -670,38 +747,21 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   Tried to destroy non-destroyable thing TestGold1117
   Tried to destroy non-destroyable thing TestGold1116
   Tried to destroy non-destroyable thing TestGold1124
-  Tried to destroy non-destroyable thing TestGold1153
-  Tried to destroy non-destroyable thing TestGold1154
-  Tried to destroy non-destroyable thing TestGold1155
-  Tried to destroy non-destroyable thing TestGold1156
-  Tried to destroy non-destroyable thing TestGold1157
-  Tried to destroy non-destroyable thing TestGold1158
-  Tried to destroy non-destroyable thing TestGold1159
-  Tried to destroy non-destroyable thing TestGold1160
-  Tried to destroy non-destroyable thing TestGold1161
-  Tried to destroy non-destroyable thing TestGold1162
-  Tried to destroy non-destroyable thing TestGold1163
-  Tried to destroy non-destroyable thing TestGold1164
-  Tried to destroy non-destroyable thing TestGold1165
-  Tried to destroy non-destroyable thing TestGold1166
-  Tried to destroy non-destroyable thing TestGold1167
-  Tried to destroy non-destroyable thing TestGold1168
-  Tried to destroy non-destroyable thing TestGold1169
-  Tried to destroy non-destroyable thing TestGold1170
-  Tried to destroy non-destroyable thing TestGold1171
-  Tried to destroy non-destroyable thing TestGold1172
-  Tried to destroy non-destroyable thing TestGold1173
-  Tried to destroy non-destroyable thing TestGold1174
-  Tried to destroy non-destroyable thing TestGold1175
-  Tried to destroy non-destroyable thing TestGold1176
-  Tried to destroy non-destroyable thing TestGold1177
-  Tried to destroy non-destroyable thing TestGold1178
-  Tried to destroy non-destroyable thing TestGold1179
-  Tried to destroy non-destroyable thing TestGold1180
-  Tried to destroy non-destroyable thing TestGold1181
-  Tried to destroy non-destroyable thing TestGold1182
-  Tried to destroy non-destroyable thing TestGold1183
-  Tried to destroy non-destroyable thing TestGold1184
+  Tried to use an uninitialized DefOf of type JobDefOf. DefOfs are initialized right after all defs all loaded. Uninitialized DefOfs will return only nulls. (hint: don't use DefOfs as default field values in Defs, try to resolve them in ResolveReferences() instead)
+  Tried to destroy non-destroyable thing TestSilver1143
+  Tried to destroy non-destroyable thing TestSilver1144
+  Tried to destroy non-destroyable thing TestSilver1145
+  Tried to destroy non-destroyable thing TestSilver1146
+  Tried to destroy non-destroyable thing TestSilver1147
+  Tried to destroy non-destroyable thing TestSilver1148
+  Tried to destroy non-destroyable thing TestSilver1149
+  Tried to destroy non-destroyable thing TestSilver1150
+  Tried to destroy non-destroyable thing TestMassDust1153
+  Tried to destroy non-destroyable thing TestSilver1154
+  Tried to destroy non-destroyable thing TestSilver1155
+  Tried to destroy non-destroyable thing TestMassDust1156
+  Tried to destroy non-destroyable thing TestMassDust1157
+  Tried to destroy non-destroyable thing TestSilver1158
   Tried to destroy non-destroyable thing TestGold1185
   Tried to destroy non-destroyable thing TestGold1186
   Tried to destroy non-destroyable thing TestGold1187
@@ -101670,6 +101730,38 @@ manipulators only, one lost                  L  1.00->  1.00  C  1.00->  1.00  U
   Tried to destroy non-destroyable thing TestGold102150
   Tried to destroy non-destroyable thing TestGold102151
   Tried to destroy non-destroyable thing TestGold102152
+  Tried to destroy non-destroyable thing TestGold102153
+  Tried to destroy non-destroyable thing TestGold102154
+  Tried to destroy non-destroyable thing TestGold102155
+  Tried to destroy non-destroyable thing TestGold102156
+  Tried to destroy non-destroyable thing TestGold102157
+  Tried to destroy non-destroyable thing TestGold102158
+  Tried to destroy non-destroyable thing TestGold102159
+  Tried to destroy non-destroyable thing TestGold102160
+  Tried to destroy non-destroyable thing TestGold102161
+  Tried to destroy non-destroyable thing TestGold102162
+  Tried to destroy non-destroyable thing TestGold102163
+  Tried to destroy non-destroyable thing TestGold102164
+  Tried to destroy non-destroyable thing TestGold102165
+  Tried to destroy non-destroyable thing TestGold102166
+  Tried to destroy non-destroyable thing TestGold102167
+  Tried to destroy non-destroyable thing TestGold102168
+  Tried to destroy non-destroyable thing TestGold102169
+  Tried to destroy non-destroyable thing TestGold102170
+  Tried to destroy non-destroyable thing TestGold102171
+  Tried to destroy non-destroyable thing TestGold102172
+  Tried to destroy non-destroyable thing TestGold102173
+  Tried to destroy non-destroyable thing TestGold102174
+  Tried to destroy non-destroyable thing TestGold102175
+  Tried to destroy non-destroyable thing TestGold102176
+  Tried to destroy non-destroyable thing TestGold102177
+  Tried to destroy non-destroyable thing TestGold102178
+  Tried to destroy non-destroyable thing TestGold102179
+  Tried to destroy non-destroyable thing TestGold102180
+  Tried to destroy non-destroyable thing TestGold102181
+  Tried to destroy non-destroyable thing TestGold102182
+  Tried to destroy non-destroyable thing TestGold102183
+  Tried to destroy non-destroyable thing TestGold102184
   ok:   no errors and no Parametric log lines during tests (debug logging off)
 
-ALL 238 INTEGRATION CHECKS PASSED
+ALL 272 INTEGRATION CHECKS PASSED

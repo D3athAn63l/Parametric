@@ -52,27 +52,18 @@
   <Overload_GizmoLabel>Overload: {0}</Overload_GizmoLabel>
   <Overload_Off>Off</Overload_Off>
   <Overload_NoOverloadOption>No overload (100%)</Overload_NoOverloadOption>
-  <Overload_GizmoDesc>Overload limit
-
-Controls how much extra mass normal loading may place on this pawn. Lower values allow more cargo but permit a stronger movement slowdown.
-
-The slowdown itself reacts to the mass the pawn actually carries. A 25% setting does not set movement to 25%: it allows loading up to the point where the overload factor would reach 25%.
-
-If injuries or other changes lower the pawn's capacity after loading, excess droppable cargo falls. Worn and equipped mass is never dropped, so it can push movement below this setting.
-
-This only sets Parametric's overload factor. Injuries, equipment, terrain and other systems can lower movement further.
-
-Right-click: apply this setting to all colony pawns.</Overload_GizmoDesc>
-  <Overload_GizmoLive>Comfortable capacity: {0}
-Routine load limit: {1}
-Current supported mass: {2}
-Current overload factor: {3}</Overload_GizmoLive>
+  <Overload_GizmoDesc>Overload limit\n\nControls how far normal loading may push this pawn past its comfortable capacity, for both inventory and gear (mass capacity) and hand carrying (carrying capacity). Lower values allow more cargo but permit a stronger movement slowdown.\n\nThe slowdown itself reacts to what the pawn actually carries. The worse of the two channels decides. A 25% setting does not set movement to 25%: it allows loading up to the point where the overload factor would reach 25%.\n\nIf injuries or other changes lower the pawn's capacity after loading, excess droppable cargo falls. Worn and equipped mass is never dropped, so it can push movement below this setting.\n\nThis only sets Parametric's overload factor. Injuries, equipment, terrain and other systems can lower movement further.\n\nRight-click: apply this setting to all colony pawns.</Overload_GizmoDesc>
+  <Overload_GizmoLiveMass>Mass comfortable: {0}\nMass routine limit: {1}\nInventory + gear: {2}</Overload_GizmoLiveMass>
+  <Overload_GizmoLiveHand>Hand comfortable: {0}\nHand routine limit: {1}\nHand load: {2}</Overload_GizmoLiveHand>
+  <Overload_GizmoLiveFactor>Current overload factor: {0}</Overload_GizmoLiveFactor>
   <Overload_GizmoIndividual>(individual setting)</Overload_GizmoIndividual>
   <Overload_ApplyToColony>Apply {0} overload limit to all colony pawns</Overload_ApplyToColony>
   <Overload_AppliedMessage>Parametric: Overload {0} applied to {1} pawns.</Overload_AppliedMessage>
 
   <!-- Stats -->
-  <Overload_MoveSpeedExplanation>Parametric overload ({0} of comfortable load): {1}</Overload_MoveSpeedExplanation>
+  <Overload_MoveSpeedExplanationMass>Parametric overload (mass load {0} of comfortable): {1}</Overload_MoveSpeedExplanationMass>
+  <Overload_MoveSpeedExplanationHand>Parametric overload (hand carry {0} of comfortable): {1}</Overload_MoveSpeedExplanationHand>
+  <Overload_HandCapacityExplanation>Overload limit {0}: {1}</Overload_HandCapacityExplanation>
   <Overload_MassExplanation>(overload limit {0}: {1} = {2})</Overload_MassExplanation>
 
 </LanguageData>

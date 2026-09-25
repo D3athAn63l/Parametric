@@ -16,20 +16,36 @@ A pawn has a **comfortable** mass capacity: the real `MassUtility.Capacity` with
   - The part of a hand-carried stack above the pawn's current vanilla carry limit spills too.
   - Unavoidable gear leaves the pawn reactively overloaded.
 - **Settings:** Enable Overload (on); default policy for player pawns (100%) and for non-player pawns (100%). Individual policies are saved in a `GameComponent`, keyed by the pawn's permanent ID, and pruned when pawns no longer exist.
+- **Two native channels, one policy.** Parametric does not merge hand carry into inventory mass. Overload works inside both vanilla carrying systems:
+  - **Mass:** `MassUtility.Capacity`, with gear + inventory kg.
+  - **Hand:** `CarryingCapacity`, with the carried stack's `stackCount × VolumePerUnit`.
+  - `StatPart_OverloadHandCarry`, appended to `CarryingCapacity` after `StatPart_LoadSupport`, multiplies the routine multiplier in exactly once. Comfortable hand capacity = the real `CarryingCapacity` (Manipulation, compensation, Load Support, other mods) with only that part skipped via a per-thread marker.
+  - Movement uses **min(mass factor, hand factor)**, never the product.
+  - Vanilla thieves (`JobGiver_Steal` count = `CarryingCapacity / VolumePerUnit`) take more under the non-player policy, move by their actual hand load, and spill only the excess when shot. No `JobGiver_Steal` or zPUAH patch.
 - **Trade pawns** (traders and trade-caravan lords) are left to vanilla. Vanilla's trader generator assigns wares to carriers by stack count, not mass, so their pack animals are overpacked by design.
 - **Debug:** an Overload block in the pawn report, *Overload: reconcile now (click pawn)*, and Overload decisions in the mass-capacity trace.
 
+### Fixed (before merge)
+- **An individual policy could be deleted while its pawn was away in a caravan.** Save pruning used `PawnsFinder.AllMapsWorldAndTemporary_AliveOrDead`, which in 1.6 excludes caravan and travelling-transporter pawns. It now uses `PawnsFinder.All_AliveOrDead`, which adds `AllCaravansAndTravellingTransporters_AliveOrDead`.
+
 ### Changed
 - `MassUtility.Capacity` applies two transforms (Load Support, then the Overload routine multiplier). The PR #2 same-pawn re-entrancy guard now keeps one flag per transform and marks a transform whenever it is applied (×1 included). Each transform is exactly once per pawn per logical calculation even with a VEF-style recursive mass stat and Load Support exactly 1. The comfortable-capacity query skips only Parametric's Overload step for that pawn.
-- New `Pawn.GetGizmos` postfix (4 patched methods) and a `MoveSpeed` StatPart.
+- New `Pawn.GetGizmos` postfix (4 patched methods), a `MoveSpeed` StatPart and a `CarryingCapacity` StatPart.
 - Parametric now writes one small `GameComponent` to saves. Removing the mod from a save logs one "could not find class" error on load; RimWorld drops the component and continues.
 
 ### Upgrading
-- With the default 100% policies, no capacity changes. Pawns already carrying more than their comfortable capacity (for example a badly injured colonist in heavy armor, or a pawn that came off a caravan with an uneven share of its cargo) now move slower. The first body change after that may spill their droppable inventory down to the routine limit.
+- With the default 100% policies, no capacity changes (mass or hand). Pawns already carrying more than their comfortable capacity (for example a badly injured colonist in heavy armor, or a pawn that came off a caravan with an uneven share of its cargo) now move slower. The first body change after that may spill their droppable inventory down to the routine limit.
 
 ### Tests
 - The formula suite adds Overload: exact policy → capacity and load → factor tables, the 200% floor, inverse-curve consistency, monotonicity, continuity, invalid inputs, excess and partial-stack maths, and 200k fuzz inputs.
-- The integration suite has 238 checks (was 168).
+- The integration suite has 272 checks (was 168). Beyond the mass-channel scenarios, it covers:
+  - caravan-pawn policy persistence through the real `All_AliveOrDead` aggregator and Scribe;
+  - hand-capacity mappings and Load Support cases A–F;
+  - the real `JobGiver_Steal.TryGiveJob` (80 → 140 units at 25%);
+  - the hand reactive series, including VolumePerUnit-not-Mass;
+  - min-not-product;
+  - the hand-carrying thief spill;
+  - carried pawn and corpse excluded.
   - They run through real `ThingOwner` inventories and `Thing.SplitOff`, the real `Pawn_CarryTracker`, a real MoveSpeed StatWorker, real injuries via `HediffSet.DirtyCache`, and a real Scribe save/load.
   - Every scenario from the design is covered, including the raid thief, the heavy raider, the hand-carrying thief, gold-at-the-edge, policy tightening, burst coalescing and the PR #2 re-entrancy cases A–F.
 - Benchmarks: policy lookup ~0.02 µs; MoveSpeed ~0.37–0.45 µs with Overload (0.10 µs without); 0 bytes allocated on the hot paths.

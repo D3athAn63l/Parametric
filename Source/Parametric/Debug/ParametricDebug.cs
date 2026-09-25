@@ -81,7 +81,8 @@ namespace Parametric.Debug
             float policy = OverloadUtility.PolicyFor(pawn);
             float comfortable = OverloadUtility.ComfortableCapacity(pawn);
             float mass = OverloadUtility.ActualSupportedMass(pawn);
-            float factor = OverloadUtility.CurrentFactor(pawn);
+            OverloadUtility.State st = OverloadUtility.Evaluate(pawn);
+            float factor = st.Factor;
             OverloadGameComponent comp = OverloadGameComponent.Instance;
             sb.Append("\n  Comfortable capacity: ").Append(comfortable.ToString("0.##")).Append(" kg");
             sb.Append("\n  Routine overload policy: ").Append(OverloadFormula.PolicyLabel(policy))
@@ -91,12 +92,23 @@ namespace Parametric.Debug
             sb.Append("\n  Routine exposed capacity: ").Append(OverloadUtility.RoutineCapacity(pawn).ToString("0.##")).Append(" kg");
             sb.Append("\n  Current supported mass: ").Append(mass.ToString("0.##")).Append(" kg (gear ").Append(MassUtility.GearMass(pawn).ToString("0.##"))
               .Append(", droppable inventory ").Append(OverloadReconciler.DroppableCargoMass(pawn).ToString("0.##")).Append(")");
+            sb.Append("\n  Mass load ratio: ").Append(OverloadFormula.LoadRatio(mass, comfortable).ToStringPercent())
+              .Append(" -> mass factor ").Append(OverloadFormula.ReactiveFactor(mass, comfortable).ToStringPercent());
+            float comfortableHand = OverloadUtility.ComfortableHandCapacity(pawn);
+            sb.Append("\n  Hand comfortable capacity (CarryingCapacity without Overload): ").Append(comfortableHand.ToString("0.##"))
+              .Append(", routine: ").Append(OverloadUtility.RoutineHandCapacity(pawn).ToString("0.##"));
             Thing carried = pawn.carryTracker != null ? pawn.carryTracker.CarriedThing : null;
             if (carried != null)
-                sb.Append("\n  Hand-carried (not part of mass; hand-carry limit): ").Append(carried.LabelCap).Append(" x").Append(carried.stackCount)
-                  .Append(" / ").Append(pawn.carryTracker.MaxStackSpaceEver(carried.def));
-            sb.Append("\n  Current load ratio: ").Append(OverloadFormula.LoadRatio(mass, comfortable).ToStringPercent());
-            sb.Append("\n  Reactive overload factor: ").Append(factor.ToStringPercent())
+            {
+                sb.Append("\n  Hand-carried: ").Append(carried.LabelCap).Append(" x").Append(carried.stackCount)
+                  .Append(" (vanilla carry limit ").Append(pawn.carryTracker.MaxStackSpaceEver(carried.def)).Append(")");
+                if (OverloadUtility.HandStack(pawn) != null)
+                    sb.Append(", hand load ").Append(OverloadUtility.ActualHandLoad(pawn).ToString("0.##"))
+                      .Append(" (units x VolumePerUnit) -> hand factor ").Append(OverloadFormula.ReactiveFactor(OverloadUtility.ActualHandLoad(pawn), comfortableHand).ToStringPercent());
+                else
+                    sb.Append(" [pawn/corpse: not part of the hand channel]");
+            }
+            sb.Append("\n  Reactive overload factor (min of channels): ").Append(factor.ToStringPercent()).Append(", limited by ").Append(st.Limiting)
               .Append(OverloadUtility.InWalkingContext(pawn) ? "" : " (not walking: caravan/holder)");
             sb.Append("\n  Reconciliation queued: ").Append(comp != null && comp.IsQueued(pawn));
             return sb.ToString();

@@ -295,7 +295,7 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 `Tests/run-tests.sh` runs both suites under Mono. The latest output is in `Tests/last-run.txt`.
 
 1. **FormulaTests** (pure math, no RimWorld): curve targets, 33 scenarios, monotonicity and continuity sweeps, NaN/∞ protection, and 200k random fuzz inputs. **All pass.**
-2. **IntegrationTests** (238 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
+2. **IntegrationTests** (272 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
    - Parametric's real patches (exactly 3 methods; nothing left under the old ID).
    - StatPart injection: idempotent, appended after `StatPart_BodySize`, clears `immutable`.
    - Synthetic human, quadruped, blob and tentacle bodies through vanilla limb and part efficiency.
@@ -326,7 +326,9 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
      - policy tightening spill; burst coalescing (4 events → 1 reconciliation after the window);
      - partial stack split; placement failure keeps cargo; hand-carry excluded from mass and spilled above the carry limit;
      - armor-only overload; the ≥ 200% floor with finite vanilla ticks/cell; thief, heavy-raider and hand-carrying thief scenarios;
-     - trade pawns exempt; no spill without a drop context;
+     - trade pawns exempt (mass and hand); no spill without a drop context;
+     - **policy persistence:** the real `PawnsFinder.All_AliveOrDead` aggregator (leaf populations stubbed: a live World is not constructible outside Unity) + real prune + real Scribe save/load. A pawn away in a caravan keeps its 25% record; the first revision's bug is reproduced; stale cleanup still works;
+     - **hand channel:** 100/75/50/25/10% → 80/100/120/140/152; the StatPart runs after Load Support; cases A–F (LS > 1, LS 1, LS off, policy 100%, comfortable keeps LS and excludes Overload, exception unwind); the **real `JobGiver_Steal.TryGiveJob`** takes 80 → 140 units; hand reactive series 80…152; VolumePerUnit not Mass (and smallVolume); `min(mass, hand)` never the product; mass channel unchanged alongside; hand-carrying thief shot → only the excess spills; carried pawn and corpse outside the channel;
      - zero-allocation hot paths; a mass hook that reads MoveSpeed does not recurse.
 
      Map placement itself (vanilla `GenDrop`) goes through a test seam; the split is real.
@@ -347,7 +349,10 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 | `MassUtility.Capacity` | ~0.03 µs vanilla → ~0.2–0.27 µs with Load Support + Overload (re-entrancy guard itself ~0.01 µs, 0 bytes) |
 | Overload policy lookup | ~0.01–0.02 µs |
 | Comfortable capacity | ~0.15 µs uncached, ~0.08 µs per-tick cached |
-| `MoveSpeed` | ~0.10 µs with Overload off → ~0.37 µs at or below comfortable load, ~0.45 µs overloaded (live gear and inventory mass), 0 bytes |
+| `MoveSpeed` | ~0.10–0.17 µs with Overload off → ~0.4–0.5 µs with Overload (live gear, inventory and hand load), 0 bytes |
+| Overload factor | mass only ~0.34 µs, hand stack ~0.19 µs, mass + hand ~0.49 µs |
+| Comfortable hand capacity | ~0.41 µs uncached (a full CarryingCapacity evaluation), ~0.11 µs per-tick cached |
+| `CarryingCapacity` | ~0.45 µs with Load Support, compensation and hand Overload |
 | Reconciliation | ~0.6 µs when nothing needs dropping, ~2 µs with a stack split. Event-driven only |
 
 **Still to check in-game:** real vanilla BodyDef XML, the settings UI, save/load, removing a bionics mod, a live caravan, and TPS on a real colony. Use the debug actions.
@@ -358,9 +363,18 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 
 ## Module 2: Overload
 
-Overload lets a pawn carry more than its comfortable mass capacity. The further past comfortable it actually is, the slower it moves. The player decides, per pawn, how far ordinary loading may push it. It all follows from three numbers.
+Overload lets a pawn carry more than it comfortably can. The further past comfortable it actually is, the slower it moves. The player decides, per pawn, how far ordinary loading may push it.
 
-### O1. Three quantities
+RimWorld has **two** native carrying systems with different units. Parametric does **not** merge them. Overload works inside each one, with the same player policy:
+
+| Channel | Vanilla capacity | Vanilla load | Who asks |
+|---|---|---|---|
+| **Mass** (inventory and gear) | `MassUtility.Capacity` (kg) | `GearMass + InventoryMass` (kg) | caravans, pack animals, pick-up, encumbrance, Pick Up And Haul |
+| **Hand** (the carried stack) | `CarryingCapacity` stat (units) | `stackCount × VolumePerUnit` | hand hauling, `JobGiver_Steal`, `Pawn_CarryTracker.MaxStackSpaceEver` |
+
+### O1. Three quantities per channel
+
+**Mass channel**
 
 | Concept | What it is | Where it comes from |
 |---|---|---|
@@ -368,23 +382,38 @@ Overload lets a pawn carry more than its comfortable mass capacity. The further 
 | **Routine capacity** | What ordinary loading sees: **C × (2 − policy)**. | What `MassUtility.Capacity` returns to everyone else: vanilla caravan formation, pack animals, pick-up and encumbrance checks, and any hauling mod that asks the normal API. |
 | **Actual supported mass (W)** | Worn apparel, equipment and inventory. | Vanilla `MassUtility.GearMass + InventoryMass` (= `GearAndInventoryMass`). |
 
-**The hand-carried thing is not part of W.** Vanilla mass accounting never includes `Pawn_CarryTracker` (verified in 1.6). Hand hauling is limited by the separate `CarryingCapacity` stat (`MaxStackSpaceEver = CarryingCapacity / VolumePerUnit`). Adding it to W would slow every ordinary hauler and govern hand carry twice.
+**The hand-carried thing is not part of W.** Vanilla mass accounting never includes `Pawn_CarryTracker` (verified in 1.6), and adding it would slow every ordinary hauler twice. Hand carry is the second channel instead.
+
+**Hand channel**
+
+| Concept | What it is | Where it comes from |
+|---|---|---|
+| **Comfortable hand capacity** | The real final `CarryingCapacity`: base, offsets and factors, vanilla Manipulation (with Parametric's compensation), body size, other mods' parts, and Load Support. **Never Overload.** | `GetStatValue(CarryingCapacity)` while a per-thread marker names the pawn, so only `StatPart_OverloadHandCarry` skips itself. Load Support's own debug bypass is **not** used, so Load Support stays in. |
+| **Routine hand capacity** | Comfortable hand × (2 − policy). | `StatPart_OverloadHandCarry`, appended to `CarryingCapacity` after `StatPart_LoadSupport`, multiplies it in exactly once. Everything that reads `CarryingCapacity` sees it with no patch of its own. |
+| **Actual hand load** | `stackCount × ThingDef.VolumePerUnit` of the carried stack. | The same relation vanilla uses: `MaxStackSpaceEver = RoundToInt(CarryingCapacity / VolumePerUnit)` and `JobGiver_Steal` count = `(int)(CarryingCapacity / VolumePerUnit)`. **Not the Mass stat**: 140 silver (28 kg) is a hand load of 140. |
+
+Carried **pawns and corpses** are not part of the hand channel (that is the future Burden module). They add no hand load and are never dropped.
 
 ### O2. Reactive slowdown
 
 ```
-R = W / C          R ≤ 100%  →  ×1.00
-                   R > 100%  →  ×(2 − R)
+per channel:  R = load / comfortable      R ≤ 100% → ×1.00      R > 100% → ×(2 − R)
+
+mass factor = f(GearMass + InventoryMass, comfortable mass capacity)
+hand factor = f(stackCount × VolumePerUnit, comfortable CarryingCapacity)
+Parametric overload factor = min(mass factor, hand factor)
 ```
+
+**The worse channel decides, the two are never multiplied.** Mass ×0.60 with hand ×0.50 gives ×0.50, not ×0.30. The two vanilla systems measure different things in different units. Multiplying them would punish one physical situation twice.
 
 | Load | 100% | 110% | 125% | 140% | 150% | 175% | 190% | ≥ 200% |
 |---|---|---|---|---|---|---|---|---|
 | Overload factor | 1.00 | 0.90 | 0.75 | 0.60 | 0.50 | 0.25 | 0.10 | 0.05 (floor) |
 
-- **Continuous, no thresholds.** Drop 20 kg and movement improves at the next step; pick something up and it worsens. Vanilla `Pawn.TicksPerMove` reads `MoveSpeed` uncached, and the factor is computed from live mass on every evaluation. Nothing polls.
+- **Continuous, no thresholds.** Drop 20 kg, or 20 units from the carried stack, and movement improves at the next step; pick something up and it worsens. Vanilla `Pawn.TicksPerMove` reads `MoveSpeed` uncached, and the factor is computed from live mass on every evaluation. Nothing polls.
 - **The denominator is always comfortable capacity.** Comfortable 80 kg, policy 25% (routine 140 kg), carrying 112 kg → 112 / 80 = 140% → ×0.60. It is not 112 / 140.
 - **It multiplies MoveSpeed.** Armor penalties, injuries, terrain, genes and other mods all stay. Other ×0.70, armor ×0.80, overload ×0.25 → ×0.14 overall. That is valid.
-- The stat explanation shows `Parametric overload (140% of comfortable load): x0.60` only when overloaded.
+- The stat explanation shows the limiting channel, and only when overloaded: `Parametric overload (mass load 140% of comfortable): x0.60` or `Parametric overload (hand carry 160% of comfortable): x0.40`.
 - **The 200% floor.** Vanilla 1.6 treats a MoveSpeed of exactly 0 safely (`TicksPerMove` maps it to 450 ticks per cell and clamps everything to [1, 450]). No other vanilla runtime code divides by MoveSpeed. The applied factor still never goes below **×0.05**, so MoveSpeed stays strictly positive for any other code that divides by it. For a human that is ≥ 260 ticks per cell before any other penalty: **effectively immobilized**. Pawns are never set to Downed.
 
 ### O3. Pawn policy (the gizmo)
@@ -393,15 +422,17 @@ Every player pawn that can carry anything gets an **Overload** gizmo. It is not 
 
 - **Left click** opens a menu: *No overload (100%) / 75% / 50% / 25% / 10%*. The choice applies to every selected pawn.
 - **Right click** gives *Apply 25% overload limit to all colony pawns*, using this pawn's current setting. It applies to all living player-faction pawns on maps, in caravans and in travelling transporters (vanilla's `PawnsFinder` collection), skipping prisoners, and confirms with `Parametric: Overload 25% applied to 12 pawns.`
-- The tooltip shows live comfortable capacity, routine limit, supported mass and the current factor.
+- The tooltip shows live mass comfortable / routine limit / inventory + gear. While a stack is hand-carried it also shows hand comfortable / routine limit / hand load. Then comes the current factor.
 
-| Policy | Routine capacity | Comfortable 80 kg |
-|---|---|---|
-| 100% (off) | ×1.00 | 80 kg |
-| 75% | ×1.25 | 100 kg |
-| 50% | ×1.50 | 120 kg |
-| 25% | ×1.75 | 140 kg |
-| 10% | ×1.90 | 152 kg |
+The policy applies to **both** channels, each in its own native capacity:
+
+| Policy | Routine multiplier | Mass (comfortable 80 kg) | Hand (comfortable CarryingCapacity 80) |
+|---|---|---|---|
+| 100% (off) | ×1.00 | 80 kg | 80 |
+| 75% | ×1.25 | 100 kg | 100 |
+| 50% | ×1.50 | 120 kg | 120 |
+| 25% | ×1.75 | 140 kg | 140 |
+| 10% | ×1.90 | 152 kg | 152 |
 
 **25% does not set the pawn's movement to 25%. It allows automatic loading up to the point where Parametric's reactive overload factor WOULD reach 25%.** 25% means a *total* capacity of 175% of comfortable, not +175%.
 
@@ -420,7 +451,7 @@ A **reconciliation** compares W with the pawn's *current* routine limit. If W is
 
 - **Largest total stack mass first**, splitting the last stack so only what is needed falls: 75 gold with 15 kg to lose → 15 dropped, 60 kept. It uses vanilla `ThingOwner.TryDrop`, which splits with `Thing.SplitOff` and places near the pawn with `GenDrop`. If placement fails, vanilla re-absorbs the split and the pawn stays overloaded. Nothing is ever duplicated or destroyed.
 - **Never dropped:** worn apparel and armor, equipped weapons, implants, carried pawns and corpses, or anything vanilla destroys when dropped.
-- **Hand-carried stacks:** the part of a stackable hand-carried stack above the pawn's *current* vanilla hand-carry limit (`MaxStackSpaceEver`) is spilled. A thief whose legs are shot drops what it can no longer hold. This follows `CarryingCapacity` (and so Load Support), not the Overload policy.
+- **Hand-carried stacks:** the part of a stackable hand-carried stack above the pawn's *current* vanilla carry limit, `MaxStackSpaceEver = RoundToInt(CarryingCapacity / VolumePerUnit)`, is spilled with vanilla `TryDropCarriedThing`. Because `CarryingCapacity` now contains the routine hand multiplier, that limit **is** the routine hand limit. Only the units above comfortable hand × (2 − policy) fall, and the rest stays in the hands. The hauling job is ended only if the whole stack had to go.
 - **Unavoidable mass wins.** If armor and weapons alone exceed the routine limit, nothing more is removed. Capacity is never raised to fit, armor is never stripped, and the pawn is never set to Downed. It is simply slow.
 
 **Triggers (event-driven, coalesced):**
@@ -431,7 +462,15 @@ A **reconciliation** compares W with the pawn's *current* routine limit. If W is
 
 Each queues the pawn **once** with a due tick about 30 ticks (0.5 s) later. More events inside that window change nothing, so a burst of shots is one reconciliation. The queue is drained in `GameComponentTick`, which returns immediately when it is empty. Nothing is dropped from inside `DirtyCache`, and nothing scans the colony. Pawns only spill where vanilla can place things (spawned on a map). Caravan pawns keep their inventory.
 
-**Example: thief with 135 kg (non-player policy 25%)**, from the integration test with real injuries:
+**Example: vanilla thief hand-carrying 135 stolen silver (non-player policy 25%)**, from the integration test with real injuries:
+
+```
+healthy:        comfortable hand 80.0  routine 140.0  vanilla carry limit 140  carrying 135 → 168.75% → ×0.3125
+legs shot:      comfortable hand 60.7  routine 106.3  vanilla carry limit 106
+reconciliation: 29 units fall (135 − 106), 106 stay in the carry tracker          → ×0.255
+```
+
+**Example: raider with 135 kg of inventory loot (non-player policy 25%)**, mass channel:
 
 ```
 healthy:        comfortable 80.0  routine 140.0  carrying 135.0  → ×0.31
@@ -467,21 +506,24 @@ This holds with Load Support > 1, exactly 1, with mass integration off, and with
 - **World-map speed has no overload slowdown.** Vanilla caravan speed (1.6 `CaravanTicksPerMoveUtility`) does not use pawns' MoveSpeed. It uses `BaseHumanlikeTicksPerCell` scaled by `Lerp(2, 1, massUsage / massCapacity)` and riding factors. Because massCapacity is the routine capacity, an overloaded caravan is even judged *lighter*. **Follow-up:** a caravan-level reactive term (or comfortable capacity for the speed ratio) is needed for correct world-map physics.
 - Caravan pawns (unspawned) never spill: there is no place to put things. Their MoveSpeed factor is not applied either, because they don't walk. When a caravan enters a map, pawns whose individual inventory is above their own comfortable capacity (vanilla distributes caravan cargo freely between members) are slowed there, and spill down to their routine limit at their next body change.
 
-### O9. Pick Up And Haul / zPUAH
+### O9. Pick Up And Haul / zPUAH, and vanilla thieves
 
-No compatibility patch. Vanilla's own inventory-loading paths all ask `MassUtility.Capacity` through `FreeSpace`, `CountToPickUpUntilOverEncumbered` and `WillBeOverEncumberedAfterPickingUp`. This is verified in 1.6: caravan gathering, pack animals, `JobGiver_PackFood`, `JobDriver_TakeInventory` and the pick-up float menu. They all see the routine capacity. Pick Up And Haul is built on those same `MassUtility` calls. **Not verified in this environment:** the zPUAH source was not available, so check in game that its load limit follows the gizmo (see the checklist).
+No compatibility patches. Each system gets Overload through the native capacity it already asks:
+
+- **Inventory hauling (Pick Up And Haul, zPUAH, vanilla caravans, pack animals, pick-up):** these use `MassUtility.Capacity` through `FreeSpace`, `EncumbrancePercent`, `CountToPickUpUntilOverEncumbered` and `WillBeOverEncumberedAfterPickingUp`. Vanilla's use of these is verified in 1.6. zPUAH's source was not available here, so check in game that its load limit follows the gizmo.
+- **Vanilla thieves:** `JobGiver_Steal` takes `min(stack, (int)(CarryingCapacity / VolumePerUnit))` and hand-carries it. Overload extends that native hand capacity, so the same non-player policy applies without patching `JobGiver_Steal`. The integration test runs the **real** `JobGiver_Steal.TryGiveJob`, with only its map searches stubbed: with comfortable CarryingCapacity 80 and silver at 0.2 kg / VolumePerUnit 1, the thief takes 80 at 100% and 140 at 25%.
 
 ### O10. Known limitations (Overload)
 
-- **Hand-carrying is not overloaded.** The policy governs mass capacity (inventory). Hand hauling stays governed by `CarryingCapacity`. Vanilla thieves steal by hand-carrying (`JobGiver_Steal`: `count = CarryingCapacity / VolumePerUnit`), so a thief's loot is limited by its carrying capacity, not by the non-player policy. Its excess still spills when that capacity falls.
 - **World-map caravan speed** ignores overload (O8).
+- **Carried pawns and corpses** are outside both channels until the Burden module.
 - **No event, no spill.** Capacity changes that raise no event (a stat-driven setMax curve, another mod's stat changing silently) are only reconciled at the next event or the Load Support timer.
 - Dropping inventory mid-job can surprise other mods' jobs that expected the item (for example an inventory-unload job). Vanilla jobs tolerate it. A job that was hauling a whole hand-carried stack that falls is ended cleanly.
 - Removing the mod from a save logs one harmless load error (see §1).
 
 ### O11. Debugging
 
-- The pawn report (*Load Support: log pawn*) now ends with an Overload block: comfortable capacity, policy (individual, player default or non-player), routine multiplier and capacity, supported mass (gear, droppable inventory, hand-carried stack against its limit), load ratio, reactive factor, and whether a reconciliation is queued.
+- The pawn report (*Load Support: log pawn*) now ends with an Overload block. It lists comfortable mass capacity; policy (individual, player default or non-player); routine multiplier and capacity; supported mass (gear, droppable inventory); mass ratio and factor; comfortable and routine hand capacity; the hand-carried stack with its vanilla limit, hand load and hand factor (carried pawns and corpses are marked as outside the channel); the combined factor and its limiting channel; and whether a reconciliation is queued.
 - *Overload: reconcile now (click pawn)* runs one reconciliation and logs what was dropped.
 - The mass-capacity trace (§12) shows each call's Overload decision (`Applied`, `AlreadyAppliedInside`, `ComfortableQuery`, …) next to the Load Support decision.
 - With *Debug logging* on, every reconciliation that drops something, or fails to place, is logged. Nothing is logged otherwise.
@@ -520,7 +562,7 @@ Source/Parametric/
     OverloadUtility.cs                  policy lookup, comfortable/routine capacity, supported mass, reactive factor
     OverloadGameComponent.cs            saved per-pawn policies + coalesced reconciliation queue
     OverloadReconciler.cs               excess-cargo spill (vanilla drop APIs; test seam)
-    StatPart_Overload.cs                MoveSpeed integration
+    StatPart_Overload.cs                MoveSpeed (min of channels) + StatPart_OverloadHandCarry (CarryingCapacity)
     Command_OverloadPolicy.cs           pawn gizmo + Pawn.GetGizmos postfix
   Debug/ParametricDebug.cs              namespace Parametric.Debug (breakdowns, dev-mode actions)
   Debug/MassCapacityTrace.cs            one-shot mass-capacity trace + Harmony owner report
