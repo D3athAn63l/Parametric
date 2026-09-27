@@ -3,7 +3,7 @@
   <name>Parametric</name>
   <author>aRed</author>
   <packageId>aRed.Parametric</packageId>
-  <modVersion>0.2.0</modVersion>
+  <modVersion>0.3.0</modVersion>
   <url>https://github.com/D3athAn63l/Parametric</url>
   <supportedVersions>
     <li>1.6</li>
@@ -37,7 +37,13 @@ Each player pawn gets an Overload gizmo (No overload / 75% / 50% / 25% / 10%) th
 - Non-player pawns use a global policy, so wounded raiders drop loot. Trade caravans are left to vanilla.
 - Right-click the gizmo to apply a pawn's setting to the whole colony.
 
-Saves: Load Support stores nothing. Overload stores only the individual policies you choose. Safe to add mid-game.
+Skill Passion Progression
+- Learned skill level 10 grants at least Minor Passion; level 20 grants Major Passion.
+- Upgrades are permanent: skill decay never removes earned passion.
+- Enabled by default, with a separate settings toggle. Existing relevant pawns are upgraded on load.
+- Uses learned levels before aptitude bonuses. No learning-limit or XP changes.
+
+Saves: Load Support stores nothing. Overload stores only the individual policies you choose. Passion upgrades use the native skill save data and remain if Parametric is removed. Safe to add mid-game.
 
 Requires Harmony.</description>
 </ModMetaData>

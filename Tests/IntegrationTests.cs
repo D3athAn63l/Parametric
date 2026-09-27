@@ -37,7 +37,7 @@ class TestStatPart : StatPart
     public override string ExplanationPart(StatRequest req) { return null; }
 }
 
-static class IntegrationTests
+static partial class IntegrationTests
 {
     static int failures, checks;
     static readonly List<string> logLines = new List<string>();
@@ -511,7 +511,7 @@ static class IntegrationTests
         patched.Sort();
         foreach (string s in patched) Console.WriteLine("  patched: " + s);
         Check("Harmony ID is aRed.Parametric", ParametricMod.HarmonyId == "aRed.Parametric");
-        Check("exactly 4 methods patched by Parametric", patched.Count == 4);
+        Check("exactly 8 methods patched by Parametric (4 existing + 4 passion hooks)", patched.Count == 8);
         Check("Pawn.GetGizmos() patched (Overload gizmo)", patched.Exists(x => x.StartsWith("Verse.Pawn.GetGizmos(")));
         Check("MassUtility.Capacity(Pawn, StringBuilder) patched", patched.Exists(s => s.StartsWith("RimWorld.MassUtility.Capacity(Pawn, StringBuilder")));
         Check("HediffSet.DirtyCache() patched", patched.Exists(s => s.StartsWith("Verse.HediffSet.DirtyCache(")));
@@ -1612,6 +1612,8 @@ static class IntegrationTests
         float sink = 0; for (int i = 0; i < 100000; i++) sink += LoadSupportCache.Get(c);
         long a1 = GC.GetTotalMemory(false);
         Check("cached lookups allocate nothing measurable (" + (a1 - a0) + " bytes / 100k)", a1 - a0 < 16 * 1024);
+
+        RunPassionProgressionTests();
 
         // ================= Benchmarks =================
         Console.WriteLine("\n=== Benchmarks (Mono JIT, outside Unity; in-game numbers will differ) ===");

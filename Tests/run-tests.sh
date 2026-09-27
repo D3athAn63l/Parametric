@@ -14,8 +14,13 @@ mono "$OUT/FormulaTests.exe"
 echo; echo "### Integration tests"
 : "${RIMWORLD_MANAGED:?set RIMWORLD_MANAGED}"; : "${HARMONY_DLL:?set HARMONY_DLL}"
 cp "$RIMWORLD_MANAGED"/*.dll "$OUT/"; cp "$HARMONY_DLL" "$OUT/"; cp 1.6/Assemblies/Parametric.dll "$OUT/"
+# Reduced DLL bundles sometimes omit Steamworks. Opt in to a metadata-only test stand-in;
+# never put this in the mod's Assemblies folder or use it in a running game.
+if [ ! -f "$OUT/com.rlabrecque.steamworks.net.dll" ] && [ "${STEAMWORKS_METADATA_STUB:-0}" = 1 ]; then
+  mcs -target:library -out:"$OUT/com.rlabrecque.steamworks.net.dll" Tests/Support/SteamworksMetadata.cs
+fi
 mcs -langversion:7.2 -nostdlib -noconfig -out:"$OUT/IntegrationTests.exe" \
   -r:"$API/mscorlib.dll" -r:"$API/System.dll" -r:"$API/System.Core.dll" -r:"$NETSTD" \
   -r:"$OUT/Assembly-CSharp.dll" -r:"$OUT/UnityEngine.CoreModule.dll" -r:"$OUT/0Harmony.dll" -r:"$OUT/Parametric.dll" \
-  Tests/IntegrationTests.cs
+  Tests/IntegrationTests.cs Tests/PassionProgressionTests.cs
 (cd "$OUT" && mono IntegrationTests.exe)

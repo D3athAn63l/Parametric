@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0: Skill Passion Progression
+
+- New independent, enabled-by-default module: learned level 10 grants at least Minor Passion; learned level 20 grants Major Passion. Native passion values persist; decay and disabling/removing the mod never reverse upgrades.
+- Four event-driven postfixes: positive `SkillRecord.Learn`, completed request-based pawn generation/redressing, non-load `Pawn.SpawnSetup`, and `Game.FinalizeInit`. No tick scans, XP changes, GM21 integration, new save component, or duplicate per-skill state.
+- One silent backfill after initialization and settings application covers maps (including held pawns), caravans, transporters and in-flight gravships. Dormant world pawns normalize when next relevant.
+- Uses learned levels before aptitude. Disabled/missing skills and unusual passion values are left alone. Works across factions and normal skill-bearing races.
+- Localized settings toggle in the existing settings window; scrolling keeps all three modules accessible.
+- Version metadata advanced to 0.3.0, including the project version that previously still read 0.1.1.
+- Built against the supplied RimWorld 1.6/Harmony DLLs. Formula suite and all 344 integration checks pass (272 existing plus 72 passion checks). Tests include real learning, decay, native save persistence, settings migration, idempotence and lifecycle hook dispatch; Unity-dependent lifecycle bodies are stubbed.
+- Load Support and Overload implementation files are unchanged. In-game validation remains on the owner's runtime checklist.
+
 ## 0.2.0: Overload module
 
 ### Added: Overload

@@ -11,7 +11,7 @@ namespace Parametric
     /// <summary>
     /// Parametric: a lightweight background systems mod.
     /// Modules: Load Support (body-derived carrying capability) and Overload (routine capacity above comfortable,
-    /// reactive movement slowdown, event-driven excess-cargo spill).
+    /// reactive movement slowdown, event-driven excess-cargo spill), and Skill Passion Progression.
     ///
     /// This class owns the settings and the single Harmony instance for the whole mod.
     /// </summary>
@@ -38,7 +38,7 @@ namespace Parametric
             }
             catch (Exception ex)
             {
-                Log.Error(LogPrefix + "Harmony patching failed; Load Support caravan/inventory scaling and cache events are disabled. " + ex);
+                Log.Error(LogPrefix + "Harmony patching failed; some module hooks may be unavailable. " + ex);
             }
         }
 
@@ -49,8 +49,10 @@ namespace Parametric
 
         public override void DoSettingsWindowContents(Rect inRect)
         {
+            var viewRect = new Rect(0f, 0f, inRect.width - 20f, settingsContentHeight);
+            Widgets.BeginScrollView(inRect, ref settingsScrollPosition, viewRect);
             var ls = new Listing_Standard();
-            ls.Begin(inRect);
+            ls.Begin(viewRect);
 
             // ---------------- Load Support module ----------------
             Text.Font = GameFont.Medium;
@@ -95,6 +97,14 @@ namespace Parametric
             ls.Label("Overload_SettingDefaultsDesc".Translate());
             ls.GapLine();
 
+            // ---------------- Skill Passion Progression module ----------------
+            Text.Font = GameFont.Medium;
+            ls.Label("PassionProgression_SectionHeader".Translate());
+            Text.Font = GameFont.Small;
+            ls.CheckboxLabeled("PassionProgression_SettingEnabled".Translate(), ref Settings.passionProgressionEnabled,
+                "PassionProgression_SettingEnabledDesc".Translate());
+            ls.GapLine();
+
             // ---------------- Mod-level ----------------
             ls.CheckboxLabeled("Parametric_SettingDebug".Translate(), ref Settings.debugLogging,
                 "Parametric_SettingDebugDesc".Translate());
@@ -103,7 +113,9 @@ namespace Parametric
             if (ls.ButtonText("Parametric_ResetDefaults".Translate()))
                 Settings.ResetToDefaults();
 
+            settingsContentHeight = ls.CurHeight + 12f;
             ls.End();
+            Widgets.EndScrollView();
 
             // Only the exponent changes cached values; the toggles are read live. Invalidate only on change.
             if (Settings.superhumanExponent != lastExponent)
@@ -114,12 +126,16 @@ namespace Parametric
         }
 
         private float lastExponent = float.NaN;
+        private Vector2 settingsScrollPosition;
+        private float settingsContentHeight = 800f;
 
         public override void WriteSettings()
         {
             base.WriteSettings();
             LoadSupportCache.InvalidateAll();
             Parametric.Overload.OverloadUtility.InvalidateAll();
+            // One-off, silent normalization also makes enabling the feature in an existing game take effect now.
+            Parametric.PassionProgression.PassionProgressionUtility.BackfillRelevantPawns();
             // A stricter default (or re-enabling the module) can leave pawns above their routine limit: queue a check
             // for every spawned pawn that carries something. One-off, only when the settings window is closed.
             try
