@@ -18,7 +18,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>Parametric</AssemblyName>
     <RootNamespace>Parametric</RootNamespace>
-    <Version>0.1.1</Version>
+    <Version>0.3.0</Version>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\1.6\Assemblies\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

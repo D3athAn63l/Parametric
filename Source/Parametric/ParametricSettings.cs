@@ -5,7 +5,7 @@ namespace Parametric
 {
     /// <summary>
     /// Mod settings for Parametric. Stored in RimWorld's Config folder, never in save files.
-    /// Fields are grouped per module (Load Support, Overload) plus mod-level debug logging.
+    /// Fields are grouped per module (Load Support, Overload, Passion Progression) plus mod-level debug logging.
     /// Overload's per-pawn policies are player state and live in the save (OverloadGameComponent), not here.
     /// </summary>
     public class ParametricSettings : ModSettings
@@ -44,6 +44,10 @@ namespace Parametric
         /// <summary>Policy of every non-player pawn (raiders, visitors...); never stored per pawn.</summary>
         public float overloadNonPlayerDefault = DefaultOverloadNonPlayerPolicy;
 
+        // ---------------- Skill Passion Progression module ----------------
+        public const bool DefaultPassionProgressionEnabled = true;
+        public bool passionProgressionEnabled = DefaultPassionProgressionEnabled;
+
         // ---------------- Mod-level ----------------
         public const bool DefaultDebugLogging = false;
         public bool debugLogging = DefaultDebugLogging;
@@ -59,6 +63,7 @@ namespace Parametric
             Scribe_Values.Look(ref overloadEnabled, "overloadEnabled", DefaultOverloadEnabled);
             Scribe_Values.Look(ref overloadPlayerDefault, "overloadPlayerDefault", DefaultOverloadPlayerPolicy);
             Scribe_Values.Look(ref overloadNonPlayerDefault, "overloadNonPlayerDefault", DefaultOverloadNonPlayerPolicy);
+            Scribe_Values.Look(ref passionProgressionEnabled, "passionProgressionEnabled", DefaultPassionProgressionEnabled);
             Scribe_Values.Look(ref debugLogging, "debugLogging", DefaultDebugLogging);
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit)
@@ -79,6 +84,7 @@ namespace Parametric
             overloadEnabled = DefaultOverloadEnabled;
             overloadPlayerDefault = DefaultOverloadPlayerPolicy;
             overloadNonPlayerDefault = DefaultOverloadNonPlayerPolicy;
+            passionProgressionEnabled = DefaultPassionProgressionEnabled;
             debugLogging = DefaultDebugLogging;
         }
 

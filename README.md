@@ -1,6 +1,6 @@
 # Parametric
 
-v0.2.0 · RimWorld 1.6 · requires Harmony · package `aRed.Parametric`
+v0.3.0 · RimWorld 1.6 · requires Harmony · package `aRed.Parametric`
 
 ## 1. What Parametric is
 
@@ -9,10 +9,39 @@ Parametric is a lightweight background systems mod. Its values are derived at ru
 ```
 Parametric
 ├── Load Support   body-derived carrying capability (v0.1)
-└── Overload       carrying past comfortable capacity, reactive slowdown, cargo spill (v0.2)
+├── Overload       carrying past comfortable capacity, reactive slowdown, cargo spill (v0.2)
+└── Skill Passion Progression   permanent passion from learned skill milestones (v0.3)
 ```
 
-**Saves.** Load Support stores nothing in saves. Overload stores only the individual policies the player chose for their own pawns, in one `GameComponent`. Adding the mod mid-game is safe. If you remove it from a save, RimWorld logs one "could not find class" error on load, drops the unknown component (`Game.FillComponents`), and continues.
+**Saves.** Load Support stores nothing in saves. Overload stores only the individual policies the player chose for their own pawns, in one `GameComponent`. Passion Progression uses native `SkillRecord.passion` save data; earned upgrades remain after removing Parametric. Adding the mod mid-game is safe. If you remove it from a save, RimWorld logs one "could not find class" error on load, drops the unknown Overload component (`Game.FillComponents`), and continues.
+
+## Skill Passion Progression (v0.3)
+
+Pawns develop passion through mastery:
+
+- Learned level **10** grants at least **Minor Passion**.
+- Learned level **20** grants **Major Passion**.
+- Upgrades are permanent. Skill decay, disabling the feature, and uninstalling Parametric never undo them.
+- **Skill Passion Progression** is enabled by default in Mod Settings. Closing settings applies it to existing relevant pawns. It is independent of Load Support and Overload.
+
+Milestones use the learned level (`levelInt`), before aptitude bonuses or penalties. A pawn with learned level 9 and +11 aptitude has not earned level-20 mastery; learned level 20 with negative aptitude has. There is no level-16 tier, new passion type, notification spam, or alteration to XP, learning saturation, decay, or Grandmaster21.
+
+The scope is any living pawn with a normal skill tracker, regardless of faction or race. Missing and disabled skills are skipped. Unknown passion values are left untouched. Mods that replace the passion model or bypass all normal lifecycle/learning hooks are outside the supported contract. Parametric never lowers passion, but it does not intercept another mod explicitly replacing that value.
+
+**Hooks, verified against the supplied RimWorld 1.6 DLL:**
+
+| Harmony postfix | Purpose |
+|---|---|
+| `SkillRecord.Learn(float, bool, bool)` | Positive learning checks that skill after vanilla updates `levelInt` directly. Low-level/already-qualified skills exit immediately; no skill-list scan or allocation. |
+| `PawnGenerator.GeneratePawn(PawnGenerationRequest)` | Normalize after generation or world-pawn redressing completes, after vanilla assigns passions. |
+| `Pawn.SpawnSetup(Map, bool)` | Normalize new arrivals, including returning world pawns. Load respawns defer to game initialization. |
+| `Game.FinalizeInit()` | One silent backfill after initialization, on both new games and loaded saves. |
+
+Backfill visits living pawns on maps (including held pawns), in caravans, travelling transporters, and an in-flight Odyssey gravship. It does not scan dormant world pawns: they normalize on generation/redressing, spawning, or positive learning. Backfill also runs once when settings are written. There is no tick hook, polling, DefDatabase scan, per-skill history, or additional save component.
+
+Developer/editor writes that bypass learning are picked up on the next positive learning, arrival, settings application, or reload. Test natural threshold crossings with XP, not just an editor that silently writes a field.
+
+**Validation:** the existing formula suite and **344 integration checks** pass against the real game/Harmony assemblies, including 72 new passion checks. See [passion test results and limits](Tests/passion-progression-results.md) and the [in-game checklist](Tests/passion-progression-runtime.md). A live RimWorld session is still required for final UI/gameplay validation.
 
 ---
 
@@ -295,7 +324,7 @@ Final Inventory/Caravan Mass Capacity: 73.4 kg
 `Tests/run-tests.sh` runs both suites under Mono. The latest output is in `Tests/last-run.txt`.
 
 1. **FormulaTests** (pure math, no RimWorld): curve targets, 33 scenarios, monotonicity and continuity sweeps, NaN/∞ protection, and 200k random fuzz inputs. **All pass.**
-2. **IntegrationTests** (272 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. They cover:
+2. **IntegrationTests** (344 checks, **all pass**) load the **real 1.6 Assembly-CSharp, real Harmony 2.4.1 and the built Parametric.dll** outside Unity. This includes the 72 passion checks described above plus the existing coverage below:
    - Parametric's real patches (exactly 3 methods; nothing left under the old ID).
    - StatPart injection: idempotent, appended after `StatPart_BodySize`, clears `immutable`.
    - Synthetic human, quadruped, blob and tentacle bodies through vanilla limb and part efficiency.
@@ -565,6 +594,9 @@ Source/Parametric/
     StatPart_Overload.cs                MoveSpeed (min of channels) + StatPart_OverloadHandCarry (CarryingCapacity)
     Command_OverloadPolicy.cs           pawn gizmo + Pawn.GetGizmos postfix
   Debug/ParametricDebug.cs              namespace Parametric.Debug (breakdowns, dev-mode actions)
+  PassionProgression/                  namespace Parametric.PassionProgression
+    PassionProgressionUtility.cs       upgrade-only normalization and one-time relevant-pawn backfill
+    HarmonyPatches.cs                  learning, completed generation, arrivals, game initialization
   Debug/MassCapacityTrace.cs            one-shot mass-capacity trace + Harmony owner report
 ```
 
@@ -576,6 +608,10 @@ Source/Parametric/
 | `HediffSet.DirtyCache()` | Cache invalidation (flips a bool); queues one coalesced Overload reconciliation if the pawn carries droppable cargo |
 | `Pawn.GetGizmos()` | Overload gizmo for eligible player pawns (pass-through postfix) |
 | `Pawn.GetInspectString()` | Optional inspect-pane line (one bool check when off) |
+| `SkillRecord.Learn(float, bool, bool)` | Upgrade passion after positive learning; never changes XP |
+| `PawnGenerator.GeneratePawn(PawnGenerationRequest)` | Normalize completed generated/redressed pawns |
+| `Pawn.SpawnSetup(Map, bool)` | Normalize non-load arrivals |
+| `Game.FinalizeInit()` | Backfill relevant pawns after initialization |
 
 ## Candidates (not implemented)
 

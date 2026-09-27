@@ -66,4 +66,7 @@
   <Overload_HandCapacityExplanation>Overload limit {0}: {1}</Overload_HandCapacityExplanation>
   <Overload_MassExplanation>(overload limit {0}: {1} = {2})</Overload_MassExplanation>
 
+  <PassionProgression_SectionHeader>Skill development</PassionProgression_SectionHeader>
+  <PassionProgression_SettingEnabled>Skill Passion Progression</PassionProgression_SettingEnabled>
+  <PassionProgression_SettingEnabledDesc>Learned skill level 10 grants at least Minor Passion; level 20 grants Major Passion. Aptitude bonuses do not count. Upgrades are permanent and remain after skill decay, disabling this feature, or removing Parametric. Existing pawns on maps and in caravans or transporters are upgraded on load or when settings are applied.</PassionProgression_SettingEnabledDesc>
 </LanguageData>
